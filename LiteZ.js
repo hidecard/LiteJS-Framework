@@ -11,8 +11,9 @@ const LiteZ = {
     themes: { current: 'light', styles: {} },
     store: null,
     api: null,
-    db: null, // Database instance
-  
+    db: null, // IndexedDB instance
+    dbConnections: {}, // Server-side DB connections (SQL/NoSQL)
+
     // ---- Component Management ----
     createComponent(name, { template, setup = () => ({}), lifecycles = {}, lazy = false } = {}) {
       if (!name || typeof template !== 'function') {
@@ -22,16 +23,16 @@ const LiteZ = {
       this.components[name] = { template, setup, lazy };
       this.lifecycles[name] = lifecycles;
     },
-  
+
     // ---- State Management ----
     createState(initialValue = {}, persistKey = null) {
       let value = persistKey && this._loadPersistedState(persistKey) 
         ? this._loadPersistedState(persistKey) 
         : this._clone(initialValue);
       const listeners = [];
-  
+
       if (persistKey) this._persistState(persistKey, value);
-  
+
       return {
         get: (key) => (key ? value[key] : value),
         set: (newValue) => {
@@ -42,7 +43,7 @@ const LiteZ = {
         subscribe: (callback) => listeners.push(callback),
       };
     },
-  
+
     // ---- Reactive Refs ----
     createRef(initialValue) {
       const state = this.createState({ value: initialValue });
@@ -52,7 +53,7 @@ const LiteZ = {
         subscribe: state.subscribe,
       };
     },
-  
+
     // ---- Global Store ----
     createStore({ state = {}, mutations = {}, actions = {} } = {}) {
       const storeState = this.createState(state);
@@ -67,7 +68,7 @@ const LiteZ = {
       };
       return this.store;
     },
-  
+
     // ---- Computed Properties with Memoization ----
     createComputed(state, computeFn, memoize = true) {
       let cache;
@@ -81,7 +82,7 @@ const LiteZ = {
       });
       return computed;
     },
-  
+
     // ---- Event Bus ----
     on(event, callback) {
       if (!this.events[event]) this.events[event] = [];
@@ -95,63 +96,63 @@ const LiteZ = {
         this.events[event] = this.events[event].filter((cb) => cb !== callback);
       }
     },
-  
+
     // ---- i18n ----
     initI18n({ locale = 'en', translations = {} } = {}) {
       this.i18n.locale = locale;
       this.i18n.translations = translations;
     },
-  
+
     t(key, params = {}) {
       const translation = this.i18n.translations[this.i18n.locale]?.[key] || key;
       return this._replaceParams(translation, params);
     },
-  
+
     // ---- Routing ----
     router(routes = {}, rootTarget = '#app') {
       this.routes = routes;
-  
+
       const normalizePath = (path) => {
         if (window.location.protocol === 'file:') {
           return window.location.hash.slice(1) || '/';
         }
         return path.replace(/^.*\/index\.html\/?/, '/');
       };
-  
+
       const renderRoute = async (path) => {
         const normalizedPath = normalizePath(path);
-  
+
         if (!this._isValidObject(this.routes)) {
           this._logError('Routes not initialized. Rendering NotFound.');
           this.render('NotFound', {}, rootTarget);
           return;
         }
-  
+
         const { route, params } = this._matchRoute(normalizedPath);
         const props = { ...route.props, params };
-  
+
         for (const middleware of this.middlewares) {
           if (!(await middleware({ path: normalizedPath, props, route }))) return;
         }
-  
+
         if (this.components[route.component]?.lazy) {
           await this.components[route.component].lazy();
         }
-  
+
         this.render(route.component, props, rootTarget);
       };
-  
+
       this._setupRouting(renderRoute);
       return {
         navigate: (path) => this._navigate(path, renderRoute),
       };
     },
-  
+
     // ---- Middleware ----
     useMiddleware(middleware) {
       if (typeof middleware === 'function') this.middlewares.push(middleware);
     },
-  
+
     // ---- Plugins ----
     usePlugin(plugin) {
       if (typeof plugin === 'function') {
@@ -159,7 +160,7 @@ const LiteZ = {
         plugin(this);
       }
     },
-  
+
     // ---- Rendering with Suspense ----
     render(name, props = {}, target = '#app', { suspense = null } = {}) {
       const component = this.components[name];
@@ -167,16 +168,16 @@ const LiteZ = {
         this._logError(`Component "${name}" not found!`);
         return;
       }
-  
+
       const element = document.querySelector(target);
       if (!element) {
         this._logError(`Target "${target}" not found in DOM!`);
         return;
       }
-  
+
       const state = this.createState(props);
       const context = component.setup(state, this);
-  
+
       const updateUI = async () => {
         try {
           if (suspense && component.lazy) {
@@ -191,25 +192,25 @@ const LiteZ = {
           this._handleError(e, name, element, suspense?.fallback);
         }
       };
-  
+
       state.subscribe(updateUI);
       this._initialRender(name, state, context, element, updateUI);
       return state;
     },
-  
+
     // ---- Error Boundary ----
     _handleError(error, name, element, fallback) {
       this._logError(`Render error in "${name}": ${error.message}`);
       if (fallback) element.innerHTML = fallback;
     },
-  
+
     // ---- Directives ----
     directives: {
       'v-show': (el, value) => (el.style.display = value ? '' : 'none'),
       'v-if': (el, value, parent) => !value && parent.removeChild(el),
       'v-focus': (el, value) => value && el.focus(),
     },
-  
+
     _applyDirectives(element, state, context) {
       Object.entries(this.directives).forEach(([directive, handler]) => {
         element.querySelectorAll(`[data-${directive}]`).forEach((el) => {
@@ -219,7 +220,7 @@ const LiteZ = {
         });
       });
     },
-  
+
     // ---- UI Creation ----
     createElement(tag, { attrs = {}, children = [], events = {} } = {}) {
       const element = document.createElement(tag);
@@ -236,26 +237,26 @@ const LiteZ = {
       });
       return element;
     },
-  
+
     // ---- Theme Management ----
     initTheme({ defaultTheme = 'light', styles = {} } = {}) {
       this.themes.current = defaultTheme;
       this.themes.styles = styles;
       this._applyTheme();
     },
-  
+
     setTheme(theme) {
       this.themes.current = theme;
       this._applyTheme();
     },
-  
+
     _applyTheme() {
       const styles = this.themes.styles[this.themes.current] || {};
       Object.entries(styles).forEach(([key, value]) => {
         document.documentElement.style.setProperty(key, value);
       });
     },
-  
+
     // ---- Form Management ----
     createForm(initialValues = {}, validators = {}) {
       const formState = this.createState({ values: initialValues, errors: {}, isSubmitting: false });
@@ -270,7 +271,7 @@ const LiteZ = {
         }
         return null;
       };
-  
+
       return {
         getValues: () => formState.get('values'),
         getErrors: () => formState.get('errors'),
@@ -304,7 +305,7 @@ const LiteZ = {
         },
       };
     },
-  
+
     // ---- API Integration ----
     initApi({ baseURL = '', interceptors = {}, csrfToken = null } = {}) {
       this.api = {
@@ -339,7 +340,7 @@ const LiteZ = {
         this.api[method] = (url, data, config) => this.api.request(method.toUpperCase(), url, data, config);
       });
     },
-  
+
     // ---- Lazy Loading with Intersection Observer ----
     lazyLoad(target, callback, options = {}) {
       const observer = new IntersectionObserver((entries, obs) => {
@@ -354,12 +355,12 @@ const LiteZ = {
       if (element) observer.observe(element);
       return () => observer.disconnect();
     },
-  
+
     // ---- Dynamic Imports ----
     dynamicImport(factory) {
       return () => factory().then(module => module.default || module);
     },
-  
+
     // ---- Accessibility Helpers ----
     a11y: {
       setAria(el, attrs) {
@@ -370,24 +371,24 @@ const LiteZ = {
         element?.focus();
       },
     },
-  
+
     // ---- WebSocket Support ----
     createWebSocket(url, options = {}) {
       const ws = new WebSocket(url);
       const state = this.createState({ connected: false, message: null, error: null });
-  
+
       ws.onopen = () => state.set({ connected: true });
       ws.onmessage = (e) => state.set({ message: e.data });
       ws.onerror = (e) => state.set({ error: e });
       ws.onclose = () => state.set({ connected: false });
-  
+
       return {
         state,
         send: (data) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(data)),
         close: () => ws.close(),
       };
     },
-  
+
     // ---- Debounce/Throttle Utilities ----
     debounce(fn, delay) {
       let timeout;
@@ -396,7 +397,7 @@ const LiteZ = {
         timeout = setTimeout(() => fn(...args), delay);
       };
     },
-  
+
     throttle(fn, limit) {
       let inThrottle;
       return (...args) => {
@@ -407,7 +408,7 @@ const LiteZ = {
         }
       };
     },
-  
+
     // ---- Testing Utilities ----
     test: {
       renderTest(name, props = {}, containerId = 'test-container') {
@@ -417,7 +418,7 @@ const LiteZ = {
           container.id = containerId;
           document.body.appendChild(container);
         }
-  
+
         const state = LiteZ.render(name, props, `#${containerId}`);
         return {
           container,
@@ -427,19 +428,19 @@ const LiteZ = {
           cleanup: () => container.remove(),
         };
       },
-  
+
       simulateEvent(element, eventType, eventData = {}) {
         const event = new Event(eventType, { bubbles: true });
         Object.assign(event, eventData);
         element.dispatchEvent(event);
       },
-  
+
       assert(condition, message) {
         if (!condition) throw new Error(`[Test Failed] ${message}`);
       },
     },
-  
-    // ---- Database Integration (IndexedDB) ----
+
+    // ---- Database Integration (IndexedDB + Server-side SQL/NoSQL) ----
     initDB({ name = 'LiteZDB', version = 1, stores = {} } = {}) {
       return new Promise((resolve, reject) => {
         const request = indexedDB.open(name, version);
@@ -458,14 +459,14 @@ const LiteZ = {
         request.onerror = (e) => reject(e.target.error);
       });
     },
-  
+
     dbAction(storeName, action, data = {}) {
       return new Promise((resolve, reject) => {
         if (!this.db) return reject(new Error('Database not initialized'));
         const tx = this.db.transaction(storeName, 'readwrite');
         const store = tx.objectStore(storeName);
         let request;
-  
+
         switch (action) {
           case 'add': request = store.add(data.value, data.key); break;
           case 'get': request = store.get(data.key); break;
@@ -474,17 +475,46 @@ const LiteZ = {
           case 'all': request = store.getAll(); break;
           default: return reject(new Error('Invalid action'));
         }
-  
+
         request.onsuccess = (e) => resolve(e.target.result);
         request.onerror = (e) => reject(e.target.error);
       });
     },
-  
+
+    // Server-side DB Connection (SQL/NoSQL via API)
+    dbConnect({ type, endpoint, options = {} } = {}) {
+      if (!this.api) {
+        this._logError('API not initialized. Call initApi first.');
+        return;
+      }
+      this.dbConnections[type] = {
+        endpoint,
+        options,
+        query: async (query, params = {}) => {
+          try {
+            const response = await this.api.post(`${endpoint}/query`, { type, query, params });
+            return response;
+          } catch (err) {
+            this._logError(`DB query failed: ${err.message}`);
+            throw err;
+          }
+        },
+      };
+    },
+
+    dbQuery(type, query, params = {}) {
+      if (!this.dbConnections[type]) {
+        this._logError(`No connection for DB type: ${type}`);
+        return Promise.reject(new Error(`No connection for ${type}`));
+      }
+      return this.dbConnections[type].query(query, params);
+    },
+
     // ---- E-commerce: Cart Management ----
     createCart() {
       const cartState = this.createState({ items: [], total: 0 }, 'cart');
       return {
-        addItem: (item) => {
+        addItem: async (item) => {
           const items = cartState.get('items');
           const existing = items.find(i => i.id === item.id);
           if (existing) {
@@ -494,24 +524,34 @@ const LiteZ = {
           }
           const total = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
           cartState.set({ items: [...items], total });
-          this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+          await this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+          // Sync with server-side DB (e.g., SQL)
+          if (this.dbConnections['sql']) {
+            await this.dbQuery('sql', 'INSERT OR UPDATE cart SET items = ?, total = ?', [JSON.stringify(items), total]);
+          }
         },
-        removeItem: (id) => {
+        removeItem: async (id) => {
           const items = cartState.get('items').filter(i => i.id !== id);
           const total = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
           cartState.set({ items, total });
-          this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+          await this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+          if (this.dbConnections['sql']) {
+            await this.dbQuery('sql', 'UPDATE cart SET items = ?, total = ?', [JSON.stringify(items), total]);
+          }
         },
         getCart: () => cartState.get(),
         checkout: async () => {
           const cart = cartState.get();
           await this.api.post('/checkout', cart);
           cartState.set({ items: [], total: 0 });
-          this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+          await this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+          if (this.dbConnections['nosql']) {
+            await this.dbQuery('nosql', 'update cart set items = [], total = 0');
+          }
         },
       };
     },
-  
+
     // ---- Social App: Social Features ----
     createSocial() {
       const notifications = this.createState({ list: [], unread: 0 }, 'notifications');
@@ -519,27 +559,36 @@ const LiteZ = {
         addPost: async (content) => {
           const post = await this.api.post('/posts', { content });
           this.emit('new-post', post);
-          this.dbAction('posts', 'add', { value: post });
+          await this.dbAction('posts', 'add', { value: post });
+          if (this.dbConnections['nosql']) {
+            await this.dbQuery('nosql', 'insert into posts', { content });
+          }
           return post;
         },
         followUser: async (userId) => {
           await this.api.post('/follow', { userId });
           this.emit('follow', userId);
         },
-        notify: (message) => {
+        notify: async (message) => {
           const list = notifications.get('list');
           list.unshift({ message, time: Date.now() });
           notifications.set({ list, unread: notifications.get('unread') + 1 });
-          this.dbAction('notifications', 'put', { key: 'list', value: notifications.get() });
+          await this.dbAction('notifications', 'put', { key: 'list', value: notifications.get() });
+          if (this.dbConnections['sql']) {
+            await this.dbQuery('sql', 'INSERT INTO notifications (message, time) VALUES (?, ?)', [message, Date.now()]);
+          }
         },
-        markRead: () => {
+        markRead: async () => {
           notifications.set({ ...notifications.get(), unread: 0 });
-          this.dbAction('notifications', 'put', { key: 'list', value: notifications.get() });
+          await this.dbAction('notifications', 'put', { key: 'list', value: notifications.get() });
+          if (this.dbConnections['nosql']) {
+            await this.dbQuery('nosql', 'update notifications set unread = 0');
+          }
         },
         getNotifications: () => notifications.get(),
       };
     },
-  
+
     // ---- Dashboard: Analytics ----
     createDashboard() {
       const analytics = this.createState({ views: 0, clicks: 0, sales: 0 }, 'analytics');
@@ -550,66 +599,80 @@ const LiteZ = {
           if (eventType === 'view') analytics.set({ ...current, views: current.views + 1 });
           if (eventType === 'click') analytics.set({ ...current, clicks: current.clicks + 1 });
           if (eventType === 'sale') analytics.set({ ...current, sales: current.sales + 1 });
-          this.dbAction('analytics', 'put', { key: 'data', value: analytics.get() });
+          await this.dbAction('analytics', 'put', { key: 'data', value: analytics.get() });
+          if (this.dbConnections['sql']) {
+            await this.dbQuery('sql', 'INSERT INTO analytics (type, value) VALUES (?, ?)', [eventType, JSON.stringify(data)]);
+          }
         },
         getAnalytics: () => analytics.get(),
       };
     },
-  
+
     // ---- Authentication ----
     createAuth() {
-      const authState = this.createState({ user: null, token: null }, 'auth');
+      const authState = this.createState({ user: null, token: null, error: null }, 'auth');
       return {
         login: async (credentials) => {
-          const response = await this.api.post('/login', credentials);
-          authState.set({ user: response.user, token: response.token });
-          this.dbAction('auth', 'put', { key: 'user', value: authState.get() });
-          this.emit('login', response.user);
+          try {
+            const response = await this.api.post('/login', credentials);
+            authState.set({ user: response.user, token: response.token, error: null });
+            await this.dbAction('auth', 'put', { key: 'user', value: authState.get() });
+            if (this.dbConnections['nosql']) {
+              await this.dbQuery('nosql', 'insert into users', { user: response.user, token: response.token });
+            }
+            this.emit('login', response.user);
+          } catch (err) {
+            authState.set({ error: 'Login failed: ' + err.message });
+          }
         },
         logout: async () => {
           await this.api.post('/logout');
-          authState.set({ user: null, token: null });
-          this.dbAction('auth', 'delete', { key: 'user' });
+          authState.set({ user: null, token: null, error: null });
+          await this.dbAction('auth', 'delete', { key: 'user' });
+          if (this.dbConnections['sql']) {
+            await this.dbQuery('sql', 'DELETE FROM users WHERE token = ?', [authState.get('token')]);
+          }
           this.emit('logout');
         },
         getUser: () => authState.get('user'),
         isAuthenticated: () => !!authState.get('token'),
+        getError: () => authState.get('error'),
       };
     },
-  
+
     // ---- Utility Functions ----
     _logError(message) {
       console.error(`[LiteZ Error] ${message}`);
     },
-  
+
     _clone(obj) {
       return JSON.parse(JSON.stringify(obj));
     },
-  
+
     _merge(target, source) {
       return typeof source === 'object' ? { ...target, ...source } : source;
     },
-  
+
     _persistState(key, value) {
       this.persistedState[key] = value;
       localStorage.setItem(key, JSON.stringify(value));
     },
-  
+
     _loadPersistedState(key) {
       return JSON.parse(localStorage.getItem(key));
     },
-  
+
     _replaceParams(str, params) {
       return Object.entries(params).reduce(
         (result, [key, value]) => result.replace(`{${key}}`, value),
         str
       );
     },
-  
+
     _isValidObject(obj) {
       return obj && typeof obj === 'object';
     },
-  
+
     _matchRoute(path) {
       for (const [routePath, config] of Object.entries(this.routes)) {
         const regex = new RegExp(`^${routePath.replace(/:([^/]+)/g, '(?<$1>[^/]+)')}$`);
@@ -618,7 +681,7 @@ const LiteZ = {
       }
       return { route: this.routes['/404'] || { component: 'NotFound' }, params: {} };
     },
-  
+
     _setupRouting(renderRoute) {
       if (window.location.protocol === 'file:') {
         window.addEventListener('hashchange', () => renderRoute(window.location.hash.slice(1) || '/'));
@@ -628,7 +691,7 @@ const LiteZ = {
         renderRoute(window.location.pathname);
       }
     },
-  
+
     _navigate(path, renderRoute) {
       if (window.location.protocol === 'file:') {
         window.location.hash = path;
@@ -637,7 +700,7 @@ const LiteZ = {
         renderRoute(path);
       }
     },
-  
+
     _initialRender(name, state, context, element, updateUI) {
       try {
         element.innerHTML = this.components[name].template(state.get(), this, context);
@@ -648,7 +711,7 @@ const LiteZ = {
         this._logError(`Mount error in "${name}": ${e.message}`);
       }
     },
-  
+
     _bindEvents(element, context) {
       element.querySelectorAll('[data-on]').forEach((el) => {
         const [event, handlerName] = el.getAttribute('data-on').split(':');
@@ -658,12 +721,12 @@ const LiteZ = {
         }
       });
     },
-  
+
     _callLifecycle(name, lifecycle, state, context, ui) {
       const fn = this.lifecycles[name]?.[lifecycle];
       if (typeof fn === 'function') fn(state, ui, context);
     },
-  
+
     // ---- Form Handling (Legacy) ----
     bindInput(state, key, validators = {}) {
       const validate = (value) => {
@@ -676,7 +739,7 @@ const LiteZ = {
         }
         return null;
       };
-  
+
       return {
         value: state.get(key) || '',
         oninput: (e) => {
@@ -687,7 +750,7 @@ const LiteZ = {
         error: state.get(`${key}Error`),
       };
     },
-  
+
     // ---- Async Data Fetching (Legacy) ----
     fetchData(url, options = {}) {
       const state = this.createState({ data: null, loading: true, error: null });
@@ -697,7 +760,7 @@ const LiteZ = {
         .catch((error) => state.set({ data: null, loading: false, error: error.message }));
       return state;
     },
-  
+
     // ---- Animation ----
     animate(elementSelector, keyframes, options = {}) {
       const element = document.querySelector(elementSelector);
@@ -714,13 +777,13 @@ const LiteZ = {
         reverse: () => animation.reverse(),
       };
     },
-  
+
     // ---- Component Composition ----
     renderComponent(name, props = {}) {
       const component = this.components[name];
       return component ? component.template(props, this, {}) : '';
     },
-  
+
     // ---- SSR Support ----
     renderToString(name, props = {}) {
       const component = this.components[name];
@@ -729,7 +792,7 @@ const LiteZ = {
       const context = component.setup(state, this);
       return component.template(state.get(), this, context);
     },
-  };
-  
-  // Global exposure
-  window.LiteZ = LiteZ;
+};
+
+// Global exposure
+window.LiteZ = LiteZ;
