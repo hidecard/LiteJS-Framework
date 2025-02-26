@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 // Node.js environment detection
 const isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
@@ -21,10 +23,10 @@ const LiteZ = {
     themes: { current: 'light', styles: {} },
     store: null,
     api: null,
-    db: null, // IndexedDB (client-side)
-    sqlPool: null, // MySQL connection pool (server-side)
-    mongoClient: null, // MongoDB client (server-side)
-    dbConfig: {}, // DB configuration storage
+    db: null,
+    sqlPool: null,
+    mongoClient: null,
+    dbConfig: {},
 
     // ---- Component Management ----
     createComponent(name, { template, setup = () => ({}), lifecycles = {}, lazy = false } = {}) {
@@ -142,8 +144,6 @@ const LiteZ = {
         };
         this._setupRouting(renderRoute);
         return { navigate: (path) => this._navigate(path, renderRoute) };
-      } else {
-        this._logError('Routing is only available in browser environments.');
       }
     },
 
@@ -192,8 +192,6 @@ const LiteZ = {
         state.subscribe(updateUI);
         this._initialRender(name, state, context, element, updateUI);
         return state;
-      } else {
-        this._logError('Rendering is only available in browser environments.');
       }
     },
 
@@ -239,7 +237,6 @@ const LiteZ = {
         });
         return element;
       }
-      this._logError('createElement is only available in browser environments.');
     },
 
     // ---- Theme Management (Client-side only) ----
@@ -337,7 +334,7 @@ const LiteZ = {
             try {
               const res = await fetch(fullConfig.url, fullConfig);
               const result = await this.interceptors.response(res);
-              return result.ok ? result.json() : Promise.reject(new Error(`HTTP error: ${result.status}`));
+              return result.ok ? result.json() : Promise.reject(new Error(`HTTP error: ${res.status}`));
             } catch (err) {
               return this.interceptors.error(err);
             }
@@ -346,8 +343,6 @@ const LiteZ = {
         ['get', 'post', 'put', 'delete'].forEach(method => {
           this.api[method] = (url, data, config) => this.api.request(method.toUpperCase(), url, data, config);
         });
-      } else {
-        this._logError('initApi is only available in browser environments with fetch support.');
       }
     },
 
@@ -484,8 +479,6 @@ const LiteZ = {
           };
           request.onerror = (e) => reject(e.target.error);
         });
-      } else {
-        this._logError('IndexedDB is only available in browser environments.');
       }
     },
 
@@ -513,8 +506,6 @@ const LiteZ = {
           tx.oncomplete = () => this._log(`IndexedDB ${action} on ${storeName} completed`);
           tx.onerror = (e) => reject(e.target.error);
         });
-      } else {
-        this._logError('IndexedDB not initialized or not available.');
       }
     },
 
@@ -524,8 +515,6 @@ const LiteZ = {
         this.dbConfig.sql = { host, user, password, database, poolSize };
         this.sqlPool = await mysql.createPool({ host, user, password, database, connectionLimit: poolSize });
         this._log('MySQL pool connected successfully');
-      } else {
-        this._logError('initSQL is only available in Node.js with mysql2 installed.');
       }
     },
 
@@ -541,9 +530,6 @@ const LiteZ = {
           this._logError(`SQL query failed: ${err.message}`);
           throw err;
         }
-      } else {
-        this._logError('SQL pool not initialized or not in Node.js environment.');
-        return [];
       }
     },
 
@@ -563,8 +549,6 @@ const LiteZ = {
         } finally {
           connection.release();
         }
-      } else {
-        this._logError('SQL transactions require Node.js and mysql2.');
       }
     },
 
@@ -589,8 +573,6 @@ const LiteZ = {
         this.mongoClient = await MongoClient.connect(url, { useUnifiedTopology: true, ...options });
         this.mongoDb = this.mongoClient.db(dbName);
         this._log('MongoDB connected successfully');
-      } else {
-        this._logError('initMongo is only available in Node.js with mongodb installed.');
       }
     },
 
@@ -615,8 +597,6 @@ const LiteZ = {
           this._logError(`MongoDB query failed: ${err.message}`);
           throw err;
         }
-      } else {
-        this._logError('MongoDB connection not initialized or not in Node.js environment.');
       }
     },
 
@@ -627,11 +607,8 @@ const LiteZ = {
         addItem: async (item) => {
           const items = cartState.get('items');
           const existing = items.find(i => i.id === item.id);
-          if (existing) {
-            existing.quantity += 1;
-          } else {
-            items.push({ ...item, quantity: 1 });
-          }
+          if (existing) existing.quantity += 1;
+          else items.push({ ...item, quantity: 1 });
           const total = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
           cartState.set({ items: [...items], total });
 
@@ -641,10 +618,7 @@ const LiteZ = {
               ['user_cart', JSON.stringify(items), total, JSON.stringify(items), total]);
           }
           if (isNode && this.mongoDb) {
-            await this.mongoQuery('cart', 'update', { 
-              filter: { _id: 'user_cart' }, 
-              update: { items, total } 
-            });
+            await this.mongoQuery('cart', 'update', { filter: { _id: 'user_cart' }, update: { items, total } });
           }
         },
         removeItem: async (id) => {
@@ -657,10 +631,7 @@ const LiteZ = {
             await this.sqlQuery('UPDATE cart SET items = ?, total = ? WHERE id = ?', [JSON.stringify(items), total, 'user_cart']);
           }
           if (isNode && this.mongoDb) {
-            await this.mongoQuery('cart', 'update', { 
-              filter: { _id: 'user_cart' }, 
-              update: { items, total } 
-            });
+            await this.mongoQuery('cart', 'update', { filter: { _id: 'user_cart' }, update: { items, total } });
           }
         },
         getCart: () => cartState.get(),
@@ -674,10 +645,7 @@ const LiteZ = {
             await this.sqlQuery('UPDATE cart SET items = ?, total = ? WHERE id = ?', ['[]', 0, 'user_cart']);
           }
           if (isNode && this.mongoDb) {
-            await this.mongoQuery('cart', 'update', { 
-              filter: { _id: 'user_cart' }, 
-              update: { items: [], total: 0 } 
-            });
+            await this.mongoQuery('cart', 'update', { filter: { _id: 'user_cart' }, update: { items: [], total: 0 } });
           }
         },
       };
@@ -909,76 +877,34 @@ const LiteZ = {
       if (typeof fn === 'function') fn(state, ui, context);
     },
 
-    // ---- Form Handling (Legacy) ----
-    bindInput(state, key, validators = {}) {
-      const validate = (value) => {
-        if (validators.required && !value) return this.t('validation.required');
-        if (validators.minLength && value.length < validators.minLength) {
-          return this.t('validation.minLength', { minLength: validators.minLength });
+    // ---- CLI Command Handler ----
+    runServer(file) {
+      if (isNode) {
+        try {
+          const serverModule = require(file);
+          if (typeof serverModule === 'function') {
+            serverModule(this);
+          } else {
+            this._logError(`Server file ${file} must export a function`);
+          }
+        } catch (err) {
+          this._logError(`Failed to run server: ${err.message}`);
         }
-        if (validators.pattern && !rules.pattern.test(value)) {
-          return this.t('validation.invalidFormat');
-        }
-        return null;
-      };
-
-      return {
-        value: state.get(key) || '',
-        oninput: (e) => {
-          const newValue = e.target?.value ?? e;
-          const error = validate(newValue);
-          state.set({ [key]: newValue, [`${key}Error`]: error });
-        },
-        error: state.get(`${key}Error`),
-      };
-    },
-
-    // ---- Async Data Fetching (Legacy) ----
-    fetchData(url, options = {}) {
-      const state = this.createState({ data: null, loading: true, error: null });
-      fetch(url, options)
-        .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP error: ${res.status}`)))
-        .then((data) => state.set({ data, loading: false, error: null }))
-        .catch((error) => state.set({ data: null, loading: false, error: error.message }));
-      return state;
-    },
-
-    // ---- Animation (Client-side only) ----
-    animate(elementSelector, keyframes, options = {}) {
-      if (!isNode && typeof document !== 'undefined') {
-        const element = document.querySelector(elementSelector);
-        if (!element) return { play: () => {}, pause: () => {}, reverse: () => {} };
-        const animation = element.animate(keyframes, {
-          duration: 300,
-          easing: 'ease-in-out',
-          fill: 'forwards',
-          ...options,
-        });
-        return {
-          play: () => animation.play(),
-          pause: () => animation.pause(),
-          reverse: () => animation.reverse(),
-        };
       }
-    },
-
-    // ---- Component Composition ----
-    renderComponent(name, props = {}) {
-      const component = this.components[name];
-      return component ? component.template(props, this, {}) : '';
-    },
-
-    // ---- SSR Support ----
-    renderToString(name, props = {}) {
-      const component = this.components[name];
-      if (!component) return '';
-      const state = this.createState(props);
-      const context = component.setup(state, this);
-      return component.template(state.get(), this, context);
     },
 };
 
-// Export  module
+// CLI Handling
+if (isNode && require.main === module) {
+  const args = process.argv.slice(2);
+  if (args.length < 1) {
+    console.error('Usage: litez <server.js>');
+    process.exit(1);
+  }
+  LiteZ.runServer(args[0]);
+}
+
+// Export as Node.js module
 if (isNode) {
   module.exports = LiteZ;
 } else {
