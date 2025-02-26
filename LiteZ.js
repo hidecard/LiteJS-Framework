@@ -1,3 +1,13 @@
+// Node.js environment detection
+const isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+
+// Server-side DB dependencies (only load in Node.js)
+let mysql, MongoClient;
+if (isNode) {
+  mysql = require('mysql2/promise');
+  MongoClient = require('mongodb').MongoClient;
+}
+
 const LiteZ = {
     // Core properties with defaults
     components: {},
@@ -11,8 +21,10 @@ const LiteZ = {
     themes: { current: 'light', styles: {} },
     store: null,
     api: null,
-    db: null, // IndexedDB instance
-    dbConnections: {}, // Server-side DB connections (SQL/NoSQL)
+    db: null, // IndexedDB (client-side)
+    sqlPool: null, // MySQL connection pool (server-side)
+    mongoClient: null, // MongoDB client (server-side)
+    dbConfig: {}, // DB configuration storage
 
     // ---- Component Management ----
     createComponent(name, { template, setup = () => ({}), lifecycles = {}, lazy = false } = {}) {
@@ -108,44 +120,31 @@ const LiteZ = {
       return this._replaceParams(translation, params);
     },
 
-    // ---- Routing ----
+    // ---- Routing (Client-side only) ----
     router(routes = {}, rootTarget = '#app') {
-      this.routes = routes;
-
-      const normalizePath = (path) => {
-        if (window.location.protocol === 'file:') {
-          return window.location.hash.slice(1) || '/';
-        }
-        return path.replace(/^.*\/index\.html\/?/, '/');
-      };
-
-      const renderRoute = async (path) => {
-        const normalizedPath = normalizePath(path);
-
-        if (!this._isValidObject(this.routes)) {
-          this._logError('Routes not initialized. Rendering NotFound.');
-          this.render('NotFound', {}, rootTarget);
-          return;
-        }
-
-        const { route, params } = this._matchRoute(normalizedPath);
-        const props = { ...route.props, params };
-
-        for (const middleware of this.middlewares) {
-          if (!(await middleware({ path: normalizedPath, props, route }))) return;
-        }
-
-        if (this.components[route.component]?.lazy) {
-          await this.components[route.component].lazy();
-        }
-
-        this.render(route.component, props, rootTarget);
-      };
-
-      this._setupRouting(renderRoute);
-      return {
-        navigate: (path) => this._navigate(path, renderRoute),
-      };
+      if (!isNode && typeof window !== 'undefined') {
+        this.routes = routes;
+        const normalizePath = (path) => window.location.protocol === 'file:' ? window.location.hash.slice(1) || '/' : path.replace(/^.*\/index\.html\/?/, '/');
+        const renderRoute = async (path) => {
+          const normalizedPath = normalizePath(path);
+          if (!this._isValidObject(this.routes)) {
+            this._logError('Routes not initialized. Rendering NotFound.');
+            this.render('NotFound', {}, rootTarget);
+            return;
+          }
+          const { route, params } = this._matchRoute(normalizedPath);
+          const props = { ...route.props, params };
+          for (const middleware of this.middlewares) {
+            if (!(await middleware({ path: normalizedPath, props, route }))) return;
+          }
+          if (this.components[route.component]?.lazy) await this.components[route.component].lazy();
+          this.render(route.component, props, rootTarget);
+        };
+        this._setupRouting(renderRoute);
+        return { navigate: (path) => this._navigate(path, renderRoute) };
+      } else {
+        this._logError('Routing is only available in browser environments.');
+      }
     },
 
     // ---- Middleware ----
@@ -161,50 +160,50 @@ const LiteZ = {
       }
     },
 
-    // ---- Rendering with Suspense ----
+    // ---- Rendering (Client-side only) ----
     render(name, props = {}, target = '#app', { suspense = null } = {}) {
-      const component = this.components[name];
-      if (!component) {
-        this._logError(`Component "${name}" not found!`);
-        return;
-      }
-
-      const element = document.querySelector(target);
-      if (!element) {
-        this._logError(`Target "${target}" not found in DOM!`);
-        return;
-      }
-
-      const state = this.createState(props);
-      const context = component.setup(state, this);
-
-      const updateUI = async () => {
-        try {
-          if (suspense && component.lazy) {
-            element.innerHTML = suspense.loading || 'Loading...';
-            await component.lazy();
-          }
-          element.innerHTML = component.template(state.get(), this, context);
-          this._applyDirectives(element, state, context);
-          this._bindEvents(element, context);
-          this._callLifecycle(name, 'onUpdate', state, context, this);
-        } catch (e) {
-          this._handleError(e, name, element, suspense?.fallback);
+      if (!isNode && typeof document !== 'undefined') {
+        const component = this.components[name];
+        if (!component) {
+          this._logError(`Component "${name}" not found!`);
+          return;
         }
-      };
-
-      state.subscribe(updateUI);
-      this._initialRender(name, state, context, element, updateUI);
-      return state;
+        const element = document.querySelector(target);
+        if (!element) {
+          this._logError(`Target "${target}" not found in DOM!`);
+          return;
+        }
+        const state = this.createState(props);
+        const context = component.setup(state, this);
+        const updateUI = async () => {
+          try {
+            if (suspense && component.lazy) {
+              element.innerHTML = suspense.loading || 'Loading...';
+              await component.lazy();
+            }
+            element.innerHTML = component.template(state.get(), this, context);
+            this._applyDirectives(element, state, context);
+            this._bindEvents(element, context);
+            this._callLifecycle(name, 'onUpdate', state, context, this);
+          } catch (e) {
+            this._handleError(e, name, element, suspense?.fallback);
+          }
+        };
+        state.subscribe(updateUI);
+        this._initialRender(name, state, context, element, updateUI);
+        return state;
+      } else {
+        this._logError('Rendering is only available in browser environments.');
+      }
     },
 
-    // ---- Error Boundary ----
+    // ---- Error Boundary (Client-side only) ----
     _handleError(error, name, element, fallback) {
       this._logError(`Render error in "${name}": ${error.message}`);
-      if (fallback) element.innerHTML = fallback;
+      if (!isNode && element && fallback) element.innerHTML = fallback;
     },
 
-    // ---- Directives ----
+    // ---- Directives (Client-side only) ----
     directives: {
       'v-show': (el, value) => (el.style.display = value ? '' : 'none'),
       'v-if': (el, value, parent) => !value && parent.removeChild(el),
@@ -212,49 +211,56 @@ const LiteZ = {
     },
 
     _applyDirectives(element, state, context) {
-      Object.entries(this.directives).forEach(([directive, handler]) => {
-        element.querySelectorAll(`[data-${directive}]`).forEach((el) => {
-          const key = el.getAttribute(`data-${directive}`);
-          const value = state.get(key);
-          handler(el, value, element);
+      if (!isNode && typeof document !== 'undefined') {
+        Object.entries(this.directives).forEach(([directive, handler]) => {
+          element.querySelectorAll(`[data-${directive}]`).forEach((el) => {
+            const key = el.getAttribute(`data-${directive}`);
+            const value = state.get(key);
+            handler(el, value, element);
+          });
         });
-      });
+      }
     },
 
-    // ---- UI Creation ----
+    // ---- UI Creation (Client-side only) ----
     createElement(tag, { attrs = {}, children = [], events = {} } = {}) {
-      const element = document.createElement(tag);
-      Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, value));
-      children.forEach((child) => {
-        if (typeof child === 'string') {
-          element.appendChild(document.createTextNode(child));
-        } else if (child instanceof HTMLElement) {
-          element.appendChild(child);
-        }
-      });
-      Object.entries(events).forEach(([event, handler]) => {
-        element.addEventListener(event, handler);
-      });
-      return element;
+      if (!isNode && typeof document !== 'undefined') {
+        const element = document.createElement(tag);
+        Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, value));
+        children.forEach((child) => {
+          if (typeof child === 'string') {
+            element.appendChild(document.createTextNode(child));
+          } else if (child instanceof HTMLElement) {
+            element.appendChild(child);
+          }
+        });
+        Object.entries(events).forEach(([event, handler]) => {
+          element.addEventListener(event, handler);
+        });
+        return element;
+      }
+      this._logError('createElement is only available in browser environments.');
     },
 
-    // ---- Theme Management ----
+    // ---- Theme Management (Client-side only) ----
     initTheme({ defaultTheme = 'light', styles = {} } = {}) {
       this.themes.current = defaultTheme;
       this.themes.styles = styles;
-      this._applyTheme();
+      if (!isNode) this._applyTheme();
     },
 
     setTheme(theme) {
       this.themes.current = theme;
-      this._applyTheme();
+      if (!isNode) this._applyTheme();
     },
 
     _applyTheme() {
-      const styles = this.themes.styles[this.themes.current] || {};
-      Object.entries(styles).forEach(([key, value]) => {
-        document.documentElement.style.setProperty(key, value);
-      });
+      if (!isNode && typeof document !== 'undefined') {
+        const styles = this.themes.styles[this.themes.current] || {};
+        Object.entries(styles).forEach(([key, value]) => {
+          document.documentElement.style.setProperty(key, value);
+        });
+      }
     },
 
     // ---- Form Management ----
@@ -306,54 +312,60 @@ const LiteZ = {
       };
     },
 
-    // ---- API Integration ----
+    // ---- API Integration (Client-side only) ----
     initApi({ baseURL = '', interceptors = {}, csrfToken = null } = {}) {
-      this.api = {
-        baseURL,
-        csrfToken,
-        interceptors: {
-          request: interceptors.request || (config => config),
-          response: interceptors.response || (res => res),
-          error: interceptors.error || (err => Promise.reject(err)),
-        },
-        async request(method, url, data = {}, config = {}) {
-          const fullConfig = this.interceptors.request({
-            method,
-            url: `${this.baseURL}${url}`,
-            headers: {
-              'Content-Type': 'application/json',
-              ...(this.csrfToken ? { 'X-CSRF-Token': this.csrfToken } : {}),
-            },
-            ...config,
-            ...(data && method !== 'GET' ? { body: JSON.stringify(data) } : {}),
-          });
-          try {
-            const res = await fetch(fullConfig.url, fullConfig);
-            const result = await this.interceptors.response(res);
-            return result.ok ? result.json() : Promise.reject(new Error(`HTTP error: ${result.status}`));
-          } catch (err) {
-            return this.interceptors.error(err);
-          }
-        },
-      };
-      ['get', 'post', 'put', 'delete'].forEach(method => {
-        this.api[method] = (url, data, config) => this.api.request(method.toUpperCase(), url, data, config);
-      });
+      if (!isNode && typeof fetch !== 'undefined') {
+        this.api = {
+          baseURL,
+          csrfToken,
+          interceptors: {
+            request: interceptors.request || (config => config),
+            response: interceptors.response || (res => res),
+            error: interceptors.error || (err => Promise.reject(err)),
+          },
+          async request(method, url, data = {}, config = {}) {
+            const fullConfig = this.interceptors.request({
+              method,
+              url: `${this.baseURL}${url}`,
+              headers: {
+                'Content-Type': 'application/json',
+                ...(this.csrfToken ? { 'X-CSRF-Token': this.csrfToken } : {}),
+              },
+              ...config,
+              ...(data && method !== 'GET' ? { body: JSON.stringify(data) } : {}),
+            });
+            try {
+              const res = await fetch(fullConfig.url, fullConfig);
+              const result = await this.interceptors.response(res);
+              return result.ok ? result.json() : Promise.reject(new Error(`HTTP error: ${result.status}`));
+            } catch (err) {
+              return this.interceptors.error(err);
+            }
+          },
+        };
+        ['get', 'post', 'put', 'delete'].forEach(method => {
+          this.api[method] = (url, data, config) => this.api.request(method.toUpperCase(), url, data, config);
+        });
+      } else {
+        this._logError('initApi is only available in browser environments with fetch support.');
+      }
     },
 
-    // ---- Lazy Loading with Intersection Observer ----
+    // ---- Lazy Loading (Client-side only) ----
     lazyLoad(target, callback, options = {}) {
-      const observer = new IntersectionObserver((entries, obs) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            callback();
-            obs.unobserve(entry.target);
-          }
-        });
-      }, { threshold: 0.1, ...options });
-      const element = document.querySelector(target);
-      if (element) observer.observe(element);
-      return () => observer.disconnect();
+      if (!isNode && typeof window !== 'undefined') {
+        const observer = new IntersectionObserver((entries, obs) => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              callback();
+              obs.unobserve(entry.target);
+            }
+          });
+        }, { threshold: 0.1, ...options });
+        const element = document.querySelector(target);
+        if (element) observer.observe(element);
+        return () => observer.disconnect();
+      }
     },
 
     // ---- Dynamic Imports ----
@@ -361,32 +373,36 @@ const LiteZ = {
       return () => factory().then(module => module.default || module);
     },
 
-    // ---- Accessibility Helpers ----
+    // ---- Accessibility Helpers (Client-side only) ----
     a11y: {
       setAria(el, attrs) {
-        Object.entries(attrs).forEach(([key, value]) => el.setAttribute(`aria-${key}`, value));
+        if (!isNode) Object.entries(attrs).forEach(([key, value]) => el.setAttribute(`aria-${key}`, value));
       },
       focus(el) {
-        const element = typeof el === 'string' ? document.querySelector(el) : el;
-        element?.focus();
+        if (!isNode) {
+          const element = typeof el === 'string' ? document.querySelector(el) : el;
+          element?.focus();
+        }
       },
     },
 
-    // ---- WebSocket Support ----
+    // ---- WebSocket Support (Client-side only) ----
     createWebSocket(url, options = {}) {
-      const ws = new WebSocket(url);
-      const state = this.createState({ connected: false, message: null, error: null });
+      if (!isNode && typeof WebSocket !== 'undefined') {
+        const ws = new WebSocket(url);
+        const state = this.createState({ connected: false, message: null, error: null });
 
-      ws.onopen = () => state.set({ connected: true });
-      ws.onmessage = (e) => state.set({ message: e.data });
-      ws.onerror = (e) => state.set({ error: e });
-      ws.onclose = () => state.set({ connected: false });
+        ws.onopen = () => state.set({ connected: true });
+        ws.onmessage = (e) => state.set({ message: e.data });
+        ws.onerror = (e) => state.set({ error: e });
+        ws.onclose = () => state.set({ connected: false });
 
-      return {
-        state,
-        send: (data) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(data)),
-        close: () => ws.close(),
-      };
+        return {
+          state,
+          send: (data) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(data)),
+          close: () => ws.close(),
+        };
+      }
     },
 
     // ---- Debounce/Throttle Utilities ----
@@ -409,30 +425,34 @@ const LiteZ = {
       };
     },
 
-    // ---- Testing Utilities ----
+    // ---- Testing Utilities (Client-side only) ----
     test: {
       renderTest(name, props = {}, containerId = 'test-container') {
-        let container = document.getElementById(containerId);
-        if (!container) {
-          container = document.createElement('div');
-          container.id = containerId;
-          document.body.appendChild(container);
-        }
+        if (!isNode && typeof document !== 'undefined') {
+          let container = document.getElementById(containerId);
+          if (!container) {
+            container = document.createElement('div');
+            container.id = containerId;
+            document.body.appendChild(container);
+          }
 
-        const state = LiteZ.render(name, props, `#${containerId}`);
-        return {
-          container,
-          state: state.formState || state,
-          find: (selector) => container.querySelector(selector),
-          findAll: (selector) => container.querySelectorAll(selector),
-          cleanup: () => container.remove(),
-        };
+          const state = LiteZ.render(name, props, `#${containerId}`);
+          return {
+            container,
+            state: state.formState || state,
+            find: (selector) => container.querySelector(selector),
+            findAll: (selector) => container.querySelectorAll(selector),
+            cleanup: () => container.remove(),
+          };
+        }
       },
 
       simulateEvent(element, eventType, eventData = {}) {
-        const event = new Event(eventType, { bubbles: true });
-        Object.assign(event, eventData);
-        element.dispatchEvent(event);
+        if (!isNode) {
+          const event = new Event(eventType, { bubbles: true });
+          Object.assign(event, eventData);
+          element.dispatchEvent(event);
+        }
       },
 
       assert(condition, message) {
@@ -440,74 +460,164 @@ const LiteZ = {
       },
     },
 
-    // ---- Database Integration (IndexedDB + Server-side SQL/NoSQL) ----
-    initDB({ name = 'LiteZDB', version = 1, stores = {} } = {}) {
-      return new Promise((resolve, reject) => {
-        const request = indexedDB.open(name, version);
-        request.onupgradeneeded = (e) => {
-          const db = e.target.result;
-          Object.keys(stores).forEach(store => {
-            if (!db.objectStoreNames.contains(store)) {
-              db.createObjectStore(store, stores[store]);
-            }
-          });
-        };
-        request.onsuccess = (e) => {
-          this.db = e.target.result;
-          resolve(this.db);
-        };
-        request.onerror = (e) => reject(e.target.error);
-      });
-    },
-
-    dbAction(storeName, action, data = {}) {
-      return new Promise((resolve, reject) => {
-        if (!this.db) return reject(new Error('Database not initialized'));
-        const tx = this.db.transaction(storeName, 'readwrite');
-        const store = tx.objectStore(storeName);
-        let request;
-
-        switch (action) {
-          case 'add': request = store.add(data.value, data.key); break;
-          case 'get': request = store.get(data.key); break;
-          case 'put': request = store.put(data.value, data.key); break;
-          case 'delete': request = store.delete(data.key); break;
-          case 'all': request = store.getAll(); break;
-          default: return reject(new Error('Invalid action'));
-        }
-
-        request.onsuccess = (e) => resolve(e.target.result);
-        request.onerror = (e) => reject(e.target.error);
-      });
-    },
-
-    // Server-side DB Connection (SQL/NoSQL via API)
-    dbConnect({ type, endpoint, options = {} } = {}) {
-      if (!this.api) {
-        this._logError('API not initialized. Call initApi first.');
-        return;
+    // ---- Database Integration (IndexedDB - Client-side) ----
+    async initDB({ name = 'LiteZDB', version = 1, stores = {} } = {}) {
+      if (!isNode && typeof indexedDB !== 'undefined') {
+        this.dbConfig.indexedDB = { name, version, stores };
+        return new Promise((resolve, reject) => {
+          const request = indexedDB.open(name, version);
+          request.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            Object.entries(stores).forEach(([store, opts]) => {
+              if (!db.objectStoreNames.contains(store)) {
+                const objectStore = db.createObjectStore(store, opts);
+                if (opts.indexes) {
+                  opts.indexes.forEach(index => objectStore.createIndex(index.name, index.keyPath, index.options));
+                }
+              }
+            });
+          };
+          request.onsuccess = (e) => {
+            this.db = e.target.result;
+            this._log(`IndexedDB ${name} connected successfully`);
+            resolve(this.db);
+          };
+          request.onerror = (e) => reject(e.target.error);
+        });
+      } else {
+        this._logError('IndexedDB is only available in browser environments.');
       }
-      this.dbConnections[type] = {
-        endpoint,
-        options,
-        query: async (query, params = {}) => {
+    },
+
+    async dbAction(storeName, action, data = {}) {
+      if (!isNode && this.db) {
+        return new Promise((resolve, reject) => {
+          const tx = this.db.transaction(storeName, 'readwrite');
+          const store = tx.objectStore(storeName);
+          let request;
+
+          switch (action) {
+            case 'add': request = store.add(data.value, data.key); break;
+            case 'get': request = store.get(data.key); break;
+            case 'getByIndex': request = store.index(data.index).get(data.value); break;
+            case 'put': request = store.put(data.value, data.key); break;
+            case 'delete': request = store.delete(data.key); break;
+            case 'all': request = store.getAll(); break;
+            case 'bulkAdd': request = Promise.all(data.values.map(val => store.add(val))); break;
+            case 'bulkDelete': request = Promise.all(data.keys.map(key => store.delete(key))); break;
+            default: return reject(new Error('Invalid action'));
+          }
+
+          request.onsuccess = (e) => resolve(e.target.result);
+          request.onerror = (e) => reject(e.target.error);
+          tx.oncomplete = () => this._log(`IndexedDB ${action} on ${storeName} completed`);
+          tx.onerror = (e) => reject(e.target.error);
+        });
+      } else {
+        this._logError('IndexedDB not initialized or not available.');
+      }
+    },
+
+    // ---- Server-side SQL Database (MySQL) ----
+    async initSQL({ host = 'localhost', user, password, database, poolSize = 10 } = {}) {
+      if (isNode && mysql) {
+        this.dbConfig.sql = { host, user, password, database, poolSize };
+        this.sqlPool = await mysql.createPool({ host, user, password, database, connectionLimit: poolSize });
+        this._log('MySQL pool connected successfully');
+      } else {
+        this._logError('initSQL is only available in Node.js with mysql2 installed.');
+      }
+    },
+
+    async sqlQuery(query, params = [], options = {}) {
+      if (isNode && this.sqlPool) {
+        const connection = options.transaction ? options.connection : await this.sqlPool.getConnection();
+        try {
+          const [rows] = await connection.execute(query, params);
+          if (!options.transaction) connection.release();
+          this._log(`SQL query executed: ${query}`);
+          return rows;
+        } catch (err) {
+          this._logError(`SQL query failed: ${err.message}`);
+          throw err;
+        }
+      } else {
+        this._logError('SQL pool not initialized or not in Node.js environment.');
+        return [];
+      }
+    },
+
+    async sqlTransaction(operations) {
+      if (isNode && this.sqlPool) {
+        const connection = await this.sqlPool.getConnection();
+        try {
+          await connection.beginTransaction();
+          const results = await Promise.all(operations.map(op => this.sqlQuery(op.query, op.params, { transaction: true, connection })));
+          await connection.commit();
+          this._log('SQL transaction committed');
+          return results;
+        } catch (err) {
+          await connection.rollback();
+          this._logError(`SQL transaction failed: ${err.message}`);
+          throw err;
+        } finally {
+          connection.release();
+        }
+      } else {
+        this._logError('SQL transactions require Node.js and mysql2.');
+      }
+    },
+
+    async sqlMigrate(migrations) {
+      if (isNode && this.sqlPool) {
+        for (const migration of migrations) {
           try {
-            const response = await this.api.post(`${endpoint}/query`, { type, query, params });
-            return response;
+            await this.sqlQuery(migration.up);
+            this._log(`Migration applied: ${migration.name}`);
           } catch (err) {
-            this._logError(`DB query failed: ${err.message}`);
+            this._logError(`Migration failed: ${migration.name} - ${err.message}`);
             throw err;
           }
-        },
-      };
+        }
+      }
     },
 
-    dbQuery(type, query, params = {}) {
-      if (!this.dbConnections[type]) {
-        this._logError(`No connection for DB type: ${type}`);
-        return Promise.reject(new Error(`No connection for ${type}`));
+    // ---- Server-side NoSQL Database (MongoDB) ----
+    async initMongo({ url = 'mongodb://localhost:27017', dbName, options = {} } = {}) {
+      if (isNode && MongoClient) {
+        this.dbConfig.mongo = { url, dbName, options };
+        this.mongoClient = await MongoClient.connect(url, { useUnifiedTopology: true, ...options });
+        this.mongoDb = this.mongoClient.db(dbName);
+        this._log('MongoDB connected successfully');
+      } else {
+        this._logError('initMongo is only available in Node.js with mongodb installed.');
       }
-      return this.dbConnections[type].query(query, params);
+    },
+
+    async mongoQuery(collection, operation, data = {}) {
+      if (isNode && this.mongoDb) {
+        try {
+          const col = this.mongoDb.collection(collection);
+          switch (operation) {
+            case 'insert': return await col.insertOne(data);
+            case 'insertMany': return await col.insertMany(data);
+            case 'find': return await col.find(data.query || {}).sort(data.sort || {}).limit(data.limit || 0).toArray();
+            case 'findOne': return await col.findOne(data);
+            case 'update': return await col.updateOne(data.filter, { $set: data.update });
+            case 'updateMany': return await col.updateMany(data.filter, { $set: data.update });
+            case 'delete': return await col.deleteOne(data);
+            case 'deleteMany': return await col.deleteMany(data);
+            case 'aggregate': return await col.aggregate(data.pipeline).toArray();
+            case 'index': return await col.createIndex(data.fields, data.options);
+            default: throw new Error('Invalid MongoDB operation');
+          }
+        } catch (err) {
+          this._logError(`MongoDB query failed: ${err.message}`);
+          throw err;
+        }
+      } else {
+        this._logError('MongoDB connection not initialized or not in Node.js environment.');
+      }
     },
 
     // ---- E-commerce: Cart Management ----
@@ -524,29 +634,50 @@ const LiteZ = {
           }
           const total = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
           cartState.set({ items: [...items], total });
-          await this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
-          // Sync with server-side DB (e.g., SQL)
-          if (this.dbConnections['sql']) {
-            await this.dbQuery('sql', 'INSERT OR UPDATE cart SET items = ?, total = ?', [JSON.stringify(items), total]);
+
+          if (!isNode && this.db) await this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+          if (isNode && this.sqlPool) {
+            await this.sqlQuery('INSERT INTO cart (id, items, total) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE items = ?, total = ?', 
+              ['user_cart', JSON.stringify(items), total, JSON.stringify(items), total]);
+          }
+          if (isNode && this.mongoDb) {
+            await this.mongoQuery('cart', 'update', { 
+              filter: { _id: 'user_cart' }, 
+              update: { items, total } 
+            });
           }
         },
         removeItem: async (id) => {
           const items = cartState.get('items').filter(i => i.id !== id);
           const total = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
           cartState.set({ items, total });
-          await this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
-          if (this.dbConnections['sql']) {
-            await this.dbQuery('sql', 'UPDATE cart SET items = ?, total = ?', [JSON.stringify(items), total]);
+
+          if (!isNode && this.db) await this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+          if (isNode && this.sqlPool) {
+            await this.sqlQuery('UPDATE cart SET items = ?, total = ? WHERE id = ?', [JSON.stringify(items), total, 'user_cart']);
+          }
+          if (isNode && this.mongoDb) {
+            await this.mongoQuery('cart', 'update', { 
+              filter: { _id: 'user_cart' }, 
+              update: { items, total } 
+            });
           }
         },
         getCart: () => cartState.get(),
         checkout: async () => {
           const cart = cartState.get();
-          await this.api.post('/checkout', cart);
+          if (this.api) await this.api.post('/checkout', cart);
           cartState.set({ items: [], total: 0 });
-          await this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
-          if (this.dbConnections['nosql']) {
-            await this.dbQuery('nosql', 'update cart set items = [], total = 0');
+
+          if (!isNode && this.db) await this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+          if (isNode && this.sqlPool) {
+            await this.sqlQuery('UPDATE cart SET items = ?, total = ? WHERE id = ?', ['[]', 0, 'user_cart']);
+          }
+          if (isNode && this.mongoDb) {
+            await this.mongoQuery('cart', 'update', { 
+              filter: { _id: 'user_cart' }, 
+              update: { items: [], total: 0 } 
+            });
           }
         },
       };
@@ -557,32 +688,44 @@ const LiteZ = {
       const notifications = this.createState({ list: [], unread: 0 }, 'notifications');
       return {
         addPost: async (content) => {
-          const post = await this.api.post('/posts', { content });
+          const post = this.api ? await this.api.post('/posts', { content }) : { id: Date.now(), content };
           this.emit('new-post', post);
-          await this.dbAction('posts', 'add', { value: post });
-          if (this.dbConnections['nosql']) {
-            await this.dbQuery('nosql', 'insert into posts', { content });
+
+          if (!isNode && this.db) await this.dbAction('posts', 'add', { value: post });
+          if (isNode && this.sqlPool) {
+            await this.sqlQuery('INSERT INTO posts (content) VALUES (?)', [content]);
+          }
+          if (isNode && this.mongoDb) {
+            await this.mongoQuery('posts', 'insert', { content });
           }
           return post;
         },
         followUser: async (userId) => {
-          await this.api.post('/follow', { userId });
+          if (this.api) await this.api.post('/follow', { userId });
           this.emit('follow', userId);
         },
         notify: async (message) => {
           const list = notifications.get('list');
           list.unshift({ message, time: Date.now() });
           notifications.set({ list, unread: notifications.get('unread') + 1 });
-          await this.dbAction('notifications', 'put', { key: 'list', value: notifications.get() });
-          if (this.dbConnections['sql']) {
-            await this.dbQuery('sql', 'INSERT INTO notifications (message, time) VALUES (?, ?)', [message, Date.now()]);
+
+          if (!isNode && this.db) await this.dbAction('notifications', 'put', { key: 'list', value: notifications.get() });
+          if (isNode && this.sqlPool) {
+            await this.sqlQuery('INSERT INTO notifications (message, time) VALUES (?, ?)', [message, Date.now()]);
+          }
+          if (isNode && this.mongoDb) {
+            await this.mongoQuery('notifications', 'insert', { message, time: Date.now() });
           }
         },
         markRead: async () => {
           notifications.set({ ...notifications.get(), unread: 0 });
-          await this.dbAction('notifications', 'put', { key: 'list', value: notifications.get() });
-          if (this.dbConnections['nosql']) {
-            await this.dbQuery('nosql', 'update notifications set unread = 0');
+
+          if (!isNode && this.db) await this.dbAction('notifications', 'put', { key: 'list', value: notifications.get() });
+          if (isNode && this.sqlPool) {
+            await this.sqlQuery('UPDATE notifications SET unread = 0');
+          }
+          if (isNode && this.mongoDb) {
+            await this.mongoQuery('notifications', 'updateMany', { filter: {}, update: { unread: 0 } });
           }
         },
         getNotifications: () => notifications.get(),
@@ -594,14 +737,18 @@ const LiteZ = {
       const analytics = this.createState({ views: 0, clicks: 0, sales: 0 }, 'analytics');
       return {
         trackEvent: async (eventType, data) => {
-          await this.api.post('/analytics', { eventType, data });
+          if (this.api) await this.api.post('/analytics', { eventType, data });
           const current = analytics.get();
           if (eventType === 'view') analytics.set({ ...current, views: current.views + 1 });
           if (eventType === 'click') analytics.set({ ...current, clicks: current.clicks + 1 });
           if (eventType === 'sale') analytics.set({ ...current, sales: current.sales + 1 });
-          await this.dbAction('analytics', 'put', { key: 'data', value: analytics.get() });
-          if (this.dbConnections['sql']) {
-            await this.dbQuery('sql', 'INSERT INTO analytics (type, value) VALUES (?, ?)', [eventType, JSON.stringify(data)]);
+
+          if (!isNode && this.db) await this.dbAction('analytics', 'put', { key: 'data', value: analytics.get() });
+          if (isNode && this.sqlPool) {
+            await this.sqlQuery('INSERT INTO analytics (type, value) VALUES (?, ?)', [eventType, JSON.stringify(data)]);
+          }
+          if (isNode && this.mongoDb) {
+            await this.mongoQuery('analytics', 'insert', { type: eventType, value: data });
           }
         },
         getAnalytics: () => analytics.get(),
@@ -614,11 +761,18 @@ const LiteZ = {
       return {
         login: async (credentials) => {
           try {
-            const response = await this.api.post('/login', credentials);
+            const response = this.api 
+              ? await this.api.post('/login', credentials) 
+              : { user: { name: 'Test' }, token: 'mock-token' };
             authState.set({ user: response.user, token: response.token, error: null });
-            await this.dbAction('auth', 'put', { key: 'user', value: authState.get() });
-            if (this.dbConnections['nosql']) {
-              await this.dbQuery('nosql', 'insert into users', { user: response.user, token: response.token });
+
+            if (!isNode && this.db) await this.dbAction('auth', 'put', { key: 'user', value: authState.get() });
+            if (isNode && this.sqlPool) {
+              await this.sqlQuery('INSERT INTO users (email, token) VALUES (?, ?) ON DUPLICATE KEY UPDATE token = ?', 
+                [credentials.email, response.token, response.token]);
+            }
+            if (isNode && this.mongoDb) {
+              await this.mongoQuery('users', 'insert', { email: credentials.email, token: response.token });
             }
             this.emit('login', response.user);
           } catch (err) {
@@ -626,11 +780,15 @@ const LiteZ = {
           }
         },
         logout: async () => {
-          await this.api.post('/logout');
+          if (this.api) await this.api.post('/logout');
           authState.set({ user: null, token: null, error: null });
-          await this.dbAction('auth', 'delete', { key: 'user' });
-          if (this.dbConnections['sql']) {
-            await this.dbQuery('sql', 'DELETE FROM users WHERE token = ?', [authState.get('token')]);
+
+          if (!isNode && this.db) await this.dbAction('auth', 'delete', { key: 'user' });
+          if (isNode && this.sqlPool) {
+            await this.sqlQuery('DELETE FROM users WHERE token = ?', [authState.get('token')]);
+          }
+          if (isNode && this.mongoDb) {
+            await this.mongoQuery('users', 'delete', { token: authState.get('token') });
           }
           this.emit('logout');
         },
@@ -641,6 +799,10 @@ const LiteZ = {
     },
 
     // ---- Utility Functions ----
+    _log(message) {
+      console.log(`[LiteZ] ${message}`);
+    },
+
     _logError(message) {
       console.error(`[LiteZ Error] ${message}`);
     },
@@ -655,11 +817,23 @@ const LiteZ = {
 
     _persistState(key, value) {
       this.persistedState[key] = value;
-      localStorage.setItem(key, JSON.stringify(value));
+      if (!isNode && typeof localStorage !== 'undefined') {
+        localStorage.setItem(key, JSON.stringify(value));
+      } else if (isNode) {
+        require('fs').writeFileSync(`${key}.json`, JSON.stringify(value));
+      }
     },
 
     _loadPersistedState(key) {
-      return JSON.parse(localStorage.getItem(key));
+      if (!isNode && typeof localStorage !== 'undefined') {
+        return JSON.parse(localStorage.getItem(key));
+      } else if (isNode) {
+        try {
+          return JSON.parse(require('fs').readFileSync(`${key}.json`, 'utf8'));
+        } catch (e) {
+          return null;
+        }
+      }
     },
 
     _replaceParams(str, params) {
@@ -683,43 +857,51 @@ const LiteZ = {
     },
 
     _setupRouting(renderRoute) {
-      if (window.location.protocol === 'file:') {
-        window.addEventListener('hashchange', () => renderRoute(window.location.hash.slice(1) || '/'));
-        renderRoute(window.location.hash.slice(1) || '/');
-      } else {
-        window.addEventListener('popstate', () => renderRoute(window.location.pathname));
-        renderRoute(window.location.pathname);
+      if (!isNode && typeof window !== 'undefined') {
+        if (window.location.protocol === 'file:') {
+          window.addEventListener('hashchange', () => renderRoute(window.location.hash.slice(1) || '/'));
+          renderRoute(window.location.hash.slice(1) || '/');
+        } else {
+          window.addEventListener('popstate', () => renderRoute(window.location.pathname));
+          renderRoute(window.location.pathname);
+        }
       }
     },
 
     _navigate(path, renderRoute) {
-      if (window.location.protocol === 'file:') {
-        window.location.hash = path;
-      } else {
-        window.history.pushState({}, '', path);
-        renderRoute(path);
+      if (!isNode && typeof window !== 'undefined') {
+        if (window.location.protocol === 'file:') {
+          window.location.hash = path;
+        } else {
+          window.history.pushState({}, '', path);
+          renderRoute(path);
+        }
       }
     },
 
     _initialRender(name, state, context, element, updateUI) {
-      try {
-        element.innerHTML = this.components[name].template(state.get(), this, context);
-        this._applyDirectives(element, state, context);
-        this._bindEvents(element, context);
-        this._callLifecycle(name, 'onMount', state, context, this);
-      } catch (e) {
-        this._logError(`Mount error in "${name}": ${e.message}`);
+      if (!isNode && typeof document !== 'undefined') {
+        try {
+          element.innerHTML = this.components[name].template(state.get(), this, context);
+          this._applyDirectives(element, state, context);
+          this._bindEvents(element, context);
+          this._callLifecycle(name, 'onMount', state, context, this);
+        } catch (e) {
+          this._logError(`Mount error in "${name}": ${e.message}`);
+        }
       }
     },
 
     _bindEvents(element, context) {
-      element.querySelectorAll('[data-on]').forEach((el) => {
-        const [event, handlerName] = el.getAttribute('data-on').split(':');
-        const handler = context[handlerName] || window[handlerName];
-        if (typeof handler === 'function') {
-          el.addEventListener(event, (e) => handler(e, context));
-        }
-      });
+      if (!isNode && typeof document !== 'undefined') {
+        element.querySelectorAll('[data-on]').forEach((el) => {
+          const [event, handlerName] = el.getAttribute('data-on').split(':');
+          const handler = context[handlerName] || window[handlerName];
+          if (typeof handler === 'function') {
+            el.addEventListener(event, (e) => handler(e, context));
+          }
+        });
+      }
     },
 
     _callLifecycle(name, lifecycle, state, context, ui) {
@@ -734,7 +916,7 @@ const LiteZ = {
         if (validators.minLength && value.length < validators.minLength) {
           return this.t('validation.minLength', { minLength: validators.minLength });
         }
-        if (validators.pattern && !validators.pattern.test(value)) {
+        if (validators.pattern && !rules.pattern.test(value)) {
           return this.t('validation.invalidFormat');
         }
         return null;
@@ -761,21 +943,23 @@ const LiteZ = {
       return state;
     },
 
-    // ---- Animation ----
+    // ---- Animation (Client-side only) ----
     animate(elementSelector, keyframes, options = {}) {
-      const element = document.querySelector(elementSelector);
-      if (!element) return { play: () => {}, pause: () => {}, reverse: () => {} };
-      const animation = element.animate(keyframes, {
-        duration: 300,
-        easing: 'ease-in-out',
-        fill: 'forwards',
-        ...options,
-      });
-      return {
-        play: () => animation.play(),
-        pause: () => animation.pause(),
-        reverse: () => animation.reverse(),
-      };
+      if (!isNode && typeof document !== 'undefined') {
+        const element = document.querySelector(elementSelector);
+        if (!element) return { play: () => {}, pause: () => {}, reverse: () => {} };
+        const animation = element.animate(keyframes, {
+          duration: 300,
+          easing: 'ease-in-out',
+          fill: 'forwards',
+          ...options,
+        });
+        return {
+          play: () => animation.play(),
+          pause: () => animation.pause(),
+          reverse: () => animation.reverse(),
+        };
+      }
     },
 
     // ---- Component Composition ----
@@ -794,5 +978,9 @@ const LiteZ = {
     },
 };
 
-// Global exposure
-window.LiteZ = LiteZ;
+// Export  module
+if (isNode) {
+  module.exports = LiteZ;
+} else {
+  window.LiteZ = LiteZ; // Global exposure for browser
+}
