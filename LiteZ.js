@@ -4,15 +4,16 @@ const LiteZ = {
   lifecycles: {},
   routes: {},
   middlewares: [],
+  globalMiddlewares: [],
   plugins: [],
   i18n: { locale: 'en', translations: {} },
   persistedState: {},
   events: {},
   themes: { current: 'light', styles: {} },
   store: null,
-  sqlDB: null,      // IndexedDB for SQL-like storage
-  noSQLDB: null,    // localStorage for NoSQL-like storage
-  firebaseDB: null, // Firebase Realtime Database
+  sqlDB: null,
+  noSQLDB: null,
+  firebaseDB: null,
 
   // ---- Component Management ----
   createComponent(name, { template, setup = () => ({}), lifecycles = {}, lazy = false } = {}) {
@@ -38,9 +39,12 @@ const LiteZ = {
       set: (newValue) => {
         value = this._merge(value, newValue);
         if (persistKey) this._persistState(persistKey, value);
-        listeners.forEach((callback) => callback());
+        listeners.forEach((callback) => callback(value));
       },
-      subscribe: (callback) => listeners.push(callback),
+      subscribe: (callback) => {
+        listeners.push(callback);
+        return () => listeners.splice(listeners.indexOf(callback), 1); // Unsubscribe
+      },
     };
   },
 
@@ -52,6 +56,21 @@ const LiteZ = {
       set value(newValue) { state.set({ value: newValue }); },
       subscribe: state.subscribe,
     };
+  },
+
+  // ---- Hooks (React-inspired) ----
+  useEffect(callback, dependencies) {
+    let prevDeps = [];
+    const effect = () => {
+      const currentDeps = dependencies ? dependencies() : [];
+      if (!prevDeps.length || currentDeps.some((dep, i) => dep !== prevDeps[i])) {
+        callback();
+        prevDeps = currentDeps;
+      }
+    };
+    const unsubscribe = this.createState().subscribe(() => effect());
+    effect(); // Run on mount
+    return unsubscribe; // Cleanup
   },
 
   // ---- Global Store ----
@@ -108,32 +127,70 @@ const LiteZ = {
     return this._replaceParams(translation, params);
   },
 
-  // ---- Routing ----
+  // ---- Enhanced Routing ----
   router(routes = {}, rootTarget = '#app') {
-    this.routes = routes;
+    this.routes = this._normalizeRoutes(routes);
+    const routerInstance = {
+      navigate: (path, replace = false) => this._navigate(path, renderRoute, replace),
+      beforeEach: (guard) => this.globalMiddlewares.push(guard),
+    };
+
     const normalizePath = (path) => window.location.protocol === 'file:' ? window.location.hash.slice(1) || '/' : path.replace(/^.*\/index\.html\/?/, '/');
     const renderRoute = async (path) => {
       const normalizedPath = normalizePath(path);
       if (!this._isValidObject(this.routes)) {
         this._logError('Routes not initialized. Rendering NotFound.');
-        this.render('NotFound', {}, rootTarget);
+        this.vRender('NotFound', {}, rootTarget);
         return;
       }
+
       const { route, params } = this._matchRoute(normalizedPath);
-      const props = { ...route.props, params };
-      for (const middleware of this.middlewares) {
-        if (!(await middleware({ path: normalizedPath, props, route }))) return;
+      const props = { ...route.props, params, query: this._parseQuery(window.location.search) };
+
+      for (const middleware of this.globalMiddlewares) {
+        const result = await middleware({ path: normalizedPath, props, route });
+        if (!result) {
+          this._log('Navigation stopped by global middleware');
+          return;
+        }
+        if (typeof result === 'string') {
+          routerInstance.navigate(result);
+          return;
+        }
       }
+
+      for (const middleware of route.middlewares || []) {
+        const result = await middleware({ path: normalizedPath, props, route });
+        if (!result) {
+          this._log('Navigation stopped by route middleware');
+          return;
+        }
+        if (typeof result === 'string') {
+          routerInstance.navigate(result);
+          return;
+        }
+      }
+
       if (this.components[route.component]?.lazy) await this.components[route.component].lazy();
-      this.render(route.component, props, rootTarget);
+      this.vRender(route.component, props, rootTarget);
     };
+
     this._setupRouting(renderRoute);
-    return { navigate: (path) => this._navigate(path, renderRoute) };
+    renderRoute(window.location.pathname || window.location.hash.slice(1) || '/');
+    return routerInstance;
   },
 
-  // ---- Middleware ----
+  // ---- Enhanced Middleware ----
   useMiddleware(middleware) {
-    if (typeof middleware === 'function') this.middlewares.push(middleware);
+    if (typeof middleware === 'function') {
+      this.middlewares.push(middleware);
+    }
+  },
+
+  useGlobalMiddleware(middleware) {
+    if (typeof middleware === 'function') {
+      this.globalMiddlewares.push(middleware);
+    }
   },
 
   // ---- Plugins ----
@@ -144,8 +201,8 @@ const LiteZ = {
     }
   },
 
-  // ---- Rendering ----
-  render(name, props = {}, target = '#app', { suspense = null } = {}) {
+  // ---- Virtual DOM Rendering ----
+  vRender(name, props = {}, target = '#app', { suspense = null } = {}) {
     const component = this.components[name];
     if (!component) {
       this._logError(`Component "${name}" not found!`);
@@ -158,13 +215,17 @@ const LiteZ = {
     }
     const state = this.createState(props);
     const context = component.setup(state, this);
+
+    let prevTree = null;
     const updateUI = async () => {
       try {
         if (suspense && component.lazy) {
           element.innerHTML = suspense.loading || 'Loading...';
           await component.lazy();
         }
-        element.innerHTML = component.template(state.get(), this, context);
+        const newTree = this._createVDOM(component.template(state.get(), this, context));
+        this._patchVDOM(element, newTree, prevTree);
+        prevTree = newTree;
         this._applyDirectives(element, state, context);
         this._bindEvents(element, state, context);
         this._callLifecycle(name, 'onUpdate', state, context, this);
@@ -177,25 +238,103 @@ const LiteZ = {
     return state;
   },
 
+  // Virtual DOM Utilities
+  _createVDOM(html) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    return this._convertToVDOM(doc.body.firstChild);
+  },
+
+  _convertToVDOM(node) {
+    if (!node) return null;
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+    const vNode = {
+      tag: node.tagName.toLowerCase(),
+      attrs: {},
+      children: [],
+    };
+    for (const attr of node.attributes || []) {
+      vNode.attrs[attr.name] = attr.value;
+    }
+    for (const child of node.childNodes) {
+      const childNode = this._convertToVDOM(child);
+      if (childNode) vNode.children.push(childNode);
+    }
+    return vNode;
+  },
+
+  _patchVDOM(element, newTree, oldTree) {
+    if (!oldTree) {
+      element.innerHTML = '';
+      this._renderVDOM(element, newTree);
+    } else if (!newTree) {
+      element.innerHTML = '';
+    } else if (this._isVDOMDifferent(newTree, oldTree)) {
+      element.innerHTML = '';
+      this._renderVDOM(element, newTree);
+    }
+  },
+
+  _isVDOMDifferent(node1, node2) {
+    if (!node1 || !node2) return true;
+    if (typeof node1 === 'string' || typeof node2 === 'string') return node1 !== node2;
+    if (node1.tag !== node2.tag) return true;
+    if (Object.keys(node1.attrs).length !== Object.keys(node2.attrs).length) return true;
+    for (const key in node1.attrs) {
+      if (node1.attrs[key] !== node2.attrs[key]) return true;
+    }
+    if (node1.children.length !== node2.children.length) return true;
+    return node1.children.some((child, i) => this._isVDOMDifferent(child, node2.children[i]));
+  },
+
+  _renderVDOM(parent, vNode) {
+    if (!vNode) return;
+    if (typeof vNode === 'string') {
+      parent.appendChild(document.createTextNode(vNode));
+      return;
+    }
+    const el = document.createElement(vNode.tag);
+    for (const [key, value] of Object.entries(vNode.attrs)) {
+      el.setAttribute(key, value);
+    }
+    vNode.children.forEach(child => this._renderVDOM(el, child));
+    parent.appendChild(el);
+  },
+
   // ---- Error Boundary ----
   _handleError(error, name, element, fallback) {
     this._logError(`Render error in "${name}": ${error.message}`);
     if (element && fallback) element.innerHTML = fallback;
   },
 
-  // ---- Directives ----
+  // ---- Enhanced Directives with z- Prefix ----
   directives: {
-    'v-show': (el, value) => (el.style.display = value ? '' : 'none'),
-    'v-if': (el, value, parent) => !value && parent.removeChild(el),
-    'v-focus': (el, value) => value && el.focus(),
+    'z-show': (el, value) => (el.style.display = value ? '' : 'none'),
+    'z-if': (el, value, parent) => !value && parent.removeChild(el),
+    'z-focus': (el, value) => value && el.focus(),
+    'z-for': (el, value, parent) => {
+      const [itemName, list] = value.split(' in ');
+      const items = eval(list); // Eval is unsafe; replace with proper context in production
+      el.removeAttribute('data-z-for');
+      const template = el.cloneNode(true);
+      parent.innerHTML = '';
+      items.forEach((item, index) => {
+        const clone = template.cloneNode(true);
+        clone.innerHTML = clone.innerHTML.replace(new RegExp(`{{${itemName}}}`, 'g'), item);
+        parent.appendChild(clone);
+      });
+    },
+    'z-model': (el, key, state) => {
+      el.value = state.get(key) || '';
+      el.addEventListener('input', (e) => state.set({ [key]: e.target.value }));
+    },
   },
 
   _applyDirectives(element, state, context) {
     Object.entries(this.directives).forEach(([directive, handler]) => {
       element.querySelectorAll(`[data-${directive}]`).forEach((el) => {
         const key = el.getAttribute(`data-${directive}`);
-        const value = state.get(key);
-        handler(el, value, element);
+        handler(el, key, element.parentNode, state);
       });
     });
   },
@@ -234,6 +373,23 @@ const LiteZ = {
     Object.entries(styles).forEach(([key, value]) => {
       document.documentElement.style.setProperty(key, value);
     });
+  },
+
+  // ---- Animation ----
+  animate(target, keyframes, options = {}) {
+    const element = document.querySelector(target);
+    if (!element) return { play: () => {}, pause: () => {}, reverse: () => {} };
+    const animation = element.animate(keyframes, {
+      duration: 300,
+      easing: 'ease-in-out',
+      fill: 'forwards',
+      ...options,
+    });
+    return {
+      play: () => animation.play(),
+      pause: () => animation.pause(),
+      reverse: () => animation.reverse(),
+    };
   },
 
   // ---- Form Management ----
@@ -436,7 +592,7 @@ const LiteZ = {
 
   // ---- MySQL/MongoDB via API ----
   initMySQLMongo({ apiBaseURL }) {
-    this.apiBaseURL = apiBaseURL || 'http://localhost:3000'; // Replace with your API URL
+    this.apiBaseURL = apiBaseURL || 'http://localhost:3000';
     this._log('MySQL/MongoDB API initialized with base URL: ' + this.apiBaseURL);
   },
 
@@ -621,6 +777,34 @@ const LiteZ = {
     };
   },
 
+  // ---- Enhanced Routing Utilities ----
+  _normalizeRoutes(routes) {
+    const normalized = {};
+    const flattenRoutes = (routeMap, parentPath = '') => {
+      Object.entries(routeMap).forEach(([path, config]) => {
+        const fullPath = parentPath + path;
+        normalized[fullPath] = {
+          ...config,
+          component: config.component || 'NotFound',
+          middlewares: config.middlewares || [],
+          children: config.children || null,
+        };
+        if (config.children) flattenRoutes(config.children, fullPath);
+      });
+    };
+    flattenRoutes(routes);
+    return normalized;
+  },
+
+  _parseQuery(search) {
+    const params = new URLSearchParams(search);
+    const query = {};
+    for (const [key, value] of params) {
+      query[key] = value;
+    }
+    return query;
+  },
+
   // ---- Utility Functions ----
   _log(message) {
     console.log(`[LiteZ] ${message}`);
@@ -675,25 +859,28 @@ const LiteZ = {
   _setupRouting(renderRoute) {
     if (window.location.protocol === 'file:') {
       window.addEventListener('hashchange', () => renderRoute(window.location.hash.slice(1) || '/'));
-      renderRoute(window.location.hash.slice(1) || '/');
     } else {
       window.addEventListener('popstate', () => renderRoute(window.location.pathname));
-      renderRoute(window.location.pathname);
     }
   },
 
-  _navigate(path, renderRoute) {
+  _navigate(path, renderRoute, replace = false) {
     if (window.location.protocol === 'file:') {
       window.location.hash = path;
     } else {
-      window.history.pushState({}, '', path);
+      if (replace) {
+        window.history.replaceState({}, '', path);
+      } else {
+        window.history.pushState({}, '', path);
+      }
       renderRoute(path);
     }
   },
 
   _initialRender(name, state, context, element, updateUI) {
     try {
-      element.innerHTML = this.components[name].template(state.get(), this, context);
+      const newTree = this._createVDOM(this.components[name].template(state.get(), this, context));
+      this._patchVDOM(element, newTree, null);
       this._applyDirectives(element, state, context);
       this._bindEvents(element, state, context);
       this._callLifecycle(name, 'onMount', state, context, this);

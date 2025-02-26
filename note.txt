@@ -1,0 +1,115 @@
+အိုကေ၊ အခု version ဖြစ်တဲ့ `lite-z.js` မှာ ပါတဲ့ **Feature တွေ** နဲ့ **Module တွေ** ကို အောက်မှာ အသေးစိတ် ပြပေးပါမယ်။ ဒီ version က Node.js ကို ဖယ်ထုတ်ပြီး browser-only client-side framework အနေနဲ့ ရေးထားတာဖြစ်ပြီး၊ MySQL, Firebase, MongoDB စတဲ့ database တွေနဲ့ ချိတ်ဆက်လို့ရအောင် လုပ်ထားပါတယ်။
+
+---
+
+### ပါဝင်တဲ့ Feature တွေ
+1. **Component Management**:
+   - `createComponent(name, { template, setup, lifecycles, lazy })`: UI component တွေ ဖန်တီးဖို့။ Template rendering, setup logic, lifecycle hooks (e.g., `onMount`, `onUpdate`), နဲ့ lazy loading ပါတယ်။
+   - `_initialRender`, `_bindEvents`, `_callLifecycle`: Component rendering နဲ့ event binding အတွက် internal methods။
+
+2. **State Management**:
+   - `createState(initialValue, persistKey)`: Reactive state ဖန်တီးဖို့။ `get`, `set`, `subscribe` methods ပါတယ်။
+   - `createRef(initialValue)`: Single-value reactive references။
+   - `createStore({ state, mutations, actions })`: Global state store အတွက် Vuex-inspired ပုံစံ။
+   - `createComputed(state, computeFn, memoize)`: Computed properties အတွက်။
+
+3. **Event Bus**:
+   - `on(event, callback)`, `emit(event, payload)`, `off(event, callback)`: Event-driven communication အတွက်။
+
+4. **Internationalization (i18n)**:
+   - `initI18n({ locale, translations })`, `t(key, params)`: Multi-language support အတွက်။
+
+5. **Routing**:
+   - `router(routes, rootTarget)`: Hash-based နဲ့ history-based routing။ `navigate` method ပါတယ်။
+   - `_setupRouting`, `_navigate`, `_matchRoute`: Internal routing logic။
+
+6. **Rendering**:
+   - `render(name, props, target, { suspense })`: Component rendering နဲ့ suspense support။
+   - `_applyDirectives`, `_handleError`: DOM directives နဲ့ error handling။
+
+7. **UI Creation**:
+   - `createElement(tag, { attrs, children, events })`: DOM element ဖန်တီးဖို့ utility။
+
+8. **Theme Management**:
+   - `initTheme({ defaultTheme, styles })`, `setTheme(theme)`: CSS variable-based theming။
+
+9. **Form Management**:
+   - `createForm(initialValues, validators)`: Reactive form handling နဲ့ validation။
+
+10. **Database Integration**:
+    - **IndexedDB (SQL-like)**:
+      - `initSQL({ name, version, stores })`: Browser-native SQL-like DB ဖန်တီးဖို့။
+      - `sqlAction(storeName, action, data)`: CRUD operations (`add`, `get`, `put`, `delete`, `all`, `bulkAdd`, `bulkDelete`)။
+    - **localStorage (NoSQL)**:
+      - `initNoSQL()`: Browser-native key-value NoSQL DB ဖန်တီးဖို့။
+      - `noSQLAction(collection, action, data)`: CRUD operations (`add`, `get`, `put`, `delete`, `all`, `bulkAdd`, `bulkDelete`)။
+    - **Firebase Realtime Database**:
+      - `initFirebase({ config })`: Firebase SDK နဲ့ ချိတ်ဆက်ဖို့။
+      - `firebaseAction(path, action, data)`: CRUD operations (`add`, `put`, `get`, `delete`, `all`)။
+    - **MySQL/MongoDB via API**:
+      - `initMySQLMongo({ apiBaseURL })`: REST API endpoint နဲ့ ချိတ်ဆက်ဖို့။
+      - `apiAction(dbType, collection, action, data)`: CRUD operations (`add`, `get`, `put`, `delete`, `all`) via `fetch`။
+
+11. **Utility Functions**:
+    - `_log`, `_logError`: Console logging။
+    - `_clone`, `_merge`: Object manipulation။
+    - `_persistState`, `_loadPersistedState`: State persistence အတွက် localStorage သုံးတယ်။
+    - `_replaceParams`, `_isValidObject`: String နဲ့ object handling utilities။
+
+---
+
+### ပါဝင်တဲ့ Module တွေ
+1. **`createCart`**:
+   - **Description**: Shopping cart စီမံခန့်ခွဲမှု။
+   - **Methods**:
+     - `addItem(item)`: Cart ထဲကို item ထည့်တယ် (quantity တိုးမယ် သို့မဟုတ် အသစ်ထည့်မယ်)။
+     - `removeItem(id)`: Item တစ်ခုကို cart ကနေ ဖယ်တယ်။
+     - `getCart()`: လက်ရှိ cart state ကို ပြန်ပေးတယ်။
+     - `checkout()`: Cart ကို ရှင်းတယ် (items နဲ့ total ကို reset လုပ်တယ်)။
+   - **DB Integration**: IndexedDB, localStorage, Firebase, MySQL/MongoDB (via API) အားလုံးနဲ့ ချိတ်ထားတယ်။
+
+2. **`createSocial`**:
+   - **Description**: Social features ဖြစ်တဲ့ posts နဲ့ notifications စီမံခန့်ခွဲမှု။
+   - **Methods**:
+     - `addPost(content)`: Post အသစ်တစ်ခု ထည့်တယ်။
+     - `followUser(userId)`: User တစ်ယောက်ကို follow လုပ်တယ် (event emit လုပ်ရုံပဲ)။
+     - `notify(message)`: Notification အသစ် ထည့်တယ်။
+     - `markRead()`: Notifications အားလုံးကို read အဖြစ် အမှတ်အသားလုပ်တယ်။
+     - `getNotifications()`: Current notifications state ကို ပြန်ပေးတယ်။
+   - **DB Integration**: IndexedDB, localStorage, Firebase, MySQL/MongoDB (via API) အားလုံးနဲ့ ချိတ်ထားတယ်။
+
+3. **`createDashboard`**:
+   - **Description**: Analytics tracking အတွက်။
+   - **Methods**:
+     - `trackEvent(eventType, data)`: Event တစ်ခု (view, click, sale) ကို မှတ်တမ်းတင်တယ်။
+     - `getAnalytics()`: လက်ရှိ analytics state ကို ပြန်ပေးတယ် (views, clicks, sales)။
+   - **DB Integration**: IndexedDB, localStorage, Firebase, MySQL/MongoDB (via API) အားလုံးနဲ့ ချိတ်ထားတယ်။
+
+4. **`createAuth`**:
+   - **Description**: User authentication စီမံခန့်ခွဲမှု။
+   - **Methods**:
+     - `login(credentials)`: User login လုပ်တယ် (mock token ထုတ်ပေးတယ်)။
+     - `logout()`: User logout လုပ်တယ်။
+     - `getUser()`: လက်ရှိ user ကို ပြန်ပေးတယ်။
+     - `isAuthenticated()`: Login ဖြစ်မဖြစ် boolean ပြန်ပေးတယ်။
+     - `getError()`: Login error ရှိရင် ပြန်ပေးတယ်။
+   - **DB Integration**: IndexedDB, localStorage, Firebase, MySQL/MongoDB (via API) အားလုံးနဲ့ ချိတ်ထားတယ်။
+
+---
+
+### Additional Notes
+- **Database ချိတ်ဆက်မှု**:
+  - **IndexedDB**: Browser-native SQL-like DB၊ persistent storage အတွက်။
+  - **localStorage**: Browser-native NoSQL key-value DB၊ ရိုးရှင်းတဲ့ data အတွက်။
+  - **Firebase**: Realtime Database ကို client-side ကနေ ချိတ်တယ်။ Firebase SDK လိုအပ်တယ်။
+  - **MySQL/MongoDB**: Server-side DB တွေမို့ REST API ကနေ `fetch` နဲ့ ချိတ်တယ်။ API server က separately လုပ်ရမယ် (e.g., `http://localhost:3000`)။
+- **Usage**: `initSQL()`, `initNoSQL()`, `initFirebase()`, `initMySQLMongo()` တွေကို မိမိလိုချင်တဲ့ DB အလိုက် ခေါ်သုံးပြီး၊ module တွေက အဲဒီ DB တွေနဲ့ ချိတ်ဆက်မှုကို အလိုလို လုပ်ပေးတယ်။
+- **Limitations**: MySQL/MongoDB အတွက် API server မရှိရင် အလုပ်မလုပ်ပါဘူး။ Firebase သုံးဖို့ SDK နဲ့ config လိုတယ်။
+
+---
+
+### Summary
+- **Features**: Component management, state management, event bus, i18n, routing, rendering, UI creation, theming, form handling, နဲ့ multi-DB integration။
+- **Modules**: `Cart`, `Social`, `Dashboard`, `Auth` တို့ပါဝင်ပြီး အားလုံးက IndexedDB, localStorage, Firebase, MySQL/MongoDB (API) နဲ့ ချိတ်ဆက်ထားတယ်။
+
+ဒါက သင်လိုချင်တဲ့ အခု version ရဲ့ အသေးစိတ် ဖြစ်ပါတယ်။ တစ်ခုခု ထပ်ထည့်ချင်တာ ဒါမှမဟုတ် ပြင်ချင်တာ ရှိရင် ပြောပေးပါ!
