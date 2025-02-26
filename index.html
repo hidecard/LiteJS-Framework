@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="csrf-token" content="your-csrf-token">
+</head>
+<body>
+  <div id="app"></div>
+  <script src="./LiteZ.js"></script>
+  <script>
+    // Setup
+    LiteZ.initApi({
+      baseURL: 'https://api.example.com',
+      csrfToken: document.querySelector('meta[name="csrf-token"]').content,
+      interceptors: {
+        request: config => {
+          const token = LiteZ.createAuth().getUser()?.token;
+          if (token) config.headers.Authorization = `Bearer ${token}`;
+          return config;
+        },
+      },
+    });
+
+    LiteZ.initDB({
+      stores: {
+        cart: { keyPath: 'id' },
+        posts: { keyPath: 'id', autoIncrement: true },
+        notifications: { keyPath: 'id', autoIncrement: true },
+        analytics: { keyPath: 'id' },
+        auth: { keyPath: 'id' },
+      },
+    }).then(() => {
+      const cart = LiteZ.createCart();
+      const social = LiteZ.createSocial();
+      const dashboard = LiteZ.createDashboard();
+      const auth = LiteZ.createAuth();
+
+      // E-commerce Component
+      LiteZ.createComponent('Shop', {
+        template: (state) => `
+          <div>
+            <h1>Shop</h1>
+            <button data-on="click:addToCart">Add Product ($10)</button>
+            <p>Cart Total: $${state.cart.total}</p>
+            <button data-on="click:checkout">Checkout</button>
+          </div>
+        `,
+        setup: (state) => {
+          state.set({ cart: cart.getCart() });
+          return {
+            addToCart: () => {
+              cart.addItem({ id: 1, name: 'Product', price: 10 });
+              state.set({ cart: cart.getCart() });
+            },
+            checkout: () => cart.checkout(),
+          };
+        },
+      });
+
+      // Social Component
+      LiteZ.createComponent('Feed', {
+        lazy: LiteZ.dynamicImport(() => Promise.resolve({
+          template: (state) => `
+            <div>
+              <h1>Feed</h1>
+              <input data-on="input:updatePost" placeholder="Post something">
+              <button data-on="click:submitPost">Post</button>
+              <p>Notifications: ${state.notifications.unread}</p>
+            </div>
+          `,
+        })),
+        setup: (state) => {
+          state.set({ notifications: social.getNotifications(), post: '' });
+          return {
+            updatePost: (e) => state.set({ post: e.target.value }),
+            submitPost: async () => {
+              await social.addPost(state.get('post'));
+              social.notify('New post added');
+              state.set({ notifications: social.getNotifications() });
+            },
+          };
+        },
+      });
+
+      // Dashboard Component
+      LiteZ.createComponent('Dashboard', {
+        template: (state) => `
+          <div>
+            <h1>Dashboard</h1>
+            <p>Views: ${state.analytics.views} | Clicks: ${state.analytics.clicks} | Sales: ${state.analytics.sales}</p>
+            <button data-on="click:trackSale">Track Sale</button>
+          </div>
+        `,
+        setup: (state) => {
+          state.set({ analytics: dashboard.getAnalytics() });
+          return {
+            trackSale: () => {
+              dashboard.trackEvent('sale', { amount: 100 });
+              state.set({ analytics: dashboard.getAnalytics() });
+            },
+          };
+        },
+      });
+
+      // Auth Component
+      LiteZ.createComponent('Auth', {
+        template: (state) => `
+          <div>
+            <h1>${state.user ? `Welcome, ${state.user.name}` : 'Login'}</h1>
+            ${state.user ? 
+              `<button data-on="click:logout">Logout</button>` :
+              `<input data-on="input:updateEmail" placeholder="Email">
+               <input data-on="input:updatePassword" type="password" placeholder="Password">
+               <button data-on="click:login">Login</button>`}
+          </div>
+        `,
+        setup: (state) => {
+          state.set({ user: auth.getUser(), email: '', password: '' });
+          return {
+            updateEmail: (e) => state.set({ email: e.target.value }),
+            updatePassword: (e) => state.set({ password: e.target.value }),
+            login: async () => {
+              await auth.login({ email: state.get('email'), password: state.get('password') });
+              state.set({ user: auth.getUser() });
+            },
+            logout: async () => {
+              await auth.logout();
+              state.set({ user: null });
+            },
+          };
+        },
+      });
+
+      // Routing
+      LiteZ.router({
+        '/': { component: 'Auth' },
+        '/shop': { component: 'Shop' },
+        '/feed': { component: 'Feed' },
+        '/dashboard': { component: 'Dashboard' },
+      }, '#app');
+    });
+  </script>
+</body>
+</html>
