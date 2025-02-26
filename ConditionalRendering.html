@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiteUI Conditional Rendering</title>
+</head>
+<body>
+
+    <p id="status">Loading...</p>
+    <button id="toggle">Toggle Status</button>
+
+    <script src="./liteUi.js"></script>
+    <script>
+        const state = LiteUI.createState({ isOnline: false });
+
+        function updateStatus() {
+            document.getElementById("status").innerText = state.get("isOnline") ? "Online ✅" : "Offline ❌";
+        }
+
+        document.getElementById("toggle").addEventListener("click", () => {
+            state.set({ isOnline: !state.get("isOnline") });
+        });
+
+        state.subscribe(updateStatus);
+        updateStatus();
+    </script>
+
+</body>
+</html>

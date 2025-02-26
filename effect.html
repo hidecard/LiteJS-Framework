@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiteUI Effects</title>
+    <title>LiteUI Effects Fix</title>
 </head>
 <body>
 
@@ -13,10 +13,10 @@
     <script>
         const state = LiteUI.createState({ count: 0 });
 
-        // Effect for auto console logging
-        LiteUI.createEffect(state, (s) => {
-            console.log("Count changed:", s.count);
-            document.getElementById("message").innerText = `Count is ${s.count}`;
+        // Subscribe to state changes
+        state.subscribe(() => {
+            console.log("Count changed:", state.get("count"));
+            document.getElementById("message").innerText = `Count is ${state.get("count")}`;
         });
 
         // Auto increase count every 2 sec

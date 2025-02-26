@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiteUI List Rendering</title>
+</head>
+<body>
+
+    <ul id="itemList"></ul>
+    <button id="addItem">Add Item</button>
+
+    <script src="./liteUi.js"></script>
+    <script>
+        const state = LiteUI.createState({ items: ["Apple", "Banana"] });
+
+        function updateList() {
+            document.getElementById("itemList").innerHTML = state.get("items").map(item => `<li>${item}</li>`).join("");
+        }
+
+        document.getElementById("addItem").addEventListener("click", () => {
+            state.set({ items: [...state.get("items"), "New Item"] });
+        });
+
+        state.subscribe(updateList);
+        updateList();
+    </script>
+
+</body>
+</html>
