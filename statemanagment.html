@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiteUI State Management</title>
+</head>
+<body>
+
+    <h1 id="title">Hello, LiteUI!</h1>
+
+    <script src="./liteUi.js"></script>
+    <script>
+        // Create state
+        const appState = LiteUI.createState({ title: "Welcome to LiteUI" });
+
+        // Subscribe UI Update
+        appState.subscribe(() => {
+            document.getElementById("title").innerText = appState.get("title");
+        });
+
+        // Update state after 2 seconds
+        setTimeout(() => {
+            appState.set({ title: "State Updated!" });
+        }, 2000);
+    </script>
+
+</body>
+</html>

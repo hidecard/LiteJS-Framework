@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiteUI Counter App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 50px;
+        }
+        .counter-box {
+            display: inline-block;
+            padding: 20px;
+            border-radius: 10px;
+            background: #f4f4f4;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
+        }
+        h1 {
+            font-size: 24px;
+        }
+        .counter {
+            font-size: 40px;
+            margin: 10px 0;
+        }
+        button {
+            padding: 10px 15px;
+            margin: 5px;
+            font-size: 18px;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        .btn-increment {
+            background: green;
+            color: white;
+        }
+        .btn-decrement {
+            background: red;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="counter-box">
+        <h1>LiteUI Counter</h1>
+        <p class="counter" id="counter">0</p>
+        <p>Double Value: <span id="doubleCounter">0</span></p>
+        <button class="btn-increment" id="increment">+</button>
+        <button class="btn-decrement" id="decrement">-</button>
+    </div>
+
+    <script src="./liteUi.js"></script>
+    <script>
+        // Create state for counter
+        const counterState = LiteUI.createState({ count: 0 });
+
+        // Computed Property for Double Counter
+        const doubleCounter = LiteUI.createComputed(counterState, (s) => s.count * 2);
+
+        // Function to update UI
+        function updateUI() {
+            document.getElementById("counter").innerText = counterState.get("count");
+            document.getElementById("doubleCounter").innerText = doubleCounter.get();
+        }
+
+        // Event Listeners for Buttons
+        document.getElementById("increment").addEventListener("click", () => {
+            counterState.set({ count: counterState.get("count") + 1 });
+        });
+
+        document.getElementById("decrement").addEventListener("click", () => {
+            counterState.set({ count: counterState.get("count") - 1 });
+        });
+
+        // Subscribe UI Updates
+        counterState.subscribe(updateUI);
+        doubleCounter.subscribe(updateUI);
+
+        // Initial UI Update
+        updateUI();
+    </script>
+
+</body>
+</html>
