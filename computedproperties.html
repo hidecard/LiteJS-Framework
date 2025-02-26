@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiteUI Computed Properties</title>
+</head>
+<body>
+
+    <p>Number: <span id="num">0</span></p>
+    <p>Double: <span id="double">0</span></p>
+
+    <button id="increase">Increase</button>
+
+    <script src="./liteUi.js"></script>
+    <script>
+        const state = LiteUI.createState({ num: 1 });
+
+        // Computed property
+        const doubleNum = LiteUI.createComputed(state, (s) => s.num * 2);
+
+        // UI update function
+        function updateUI() {
+            document.getElementById("num").innerText = state.get("num");
+            document.getElementById("double").innerText = doubleNum.get();
+        }
+
+        // Button Click
+        document.getElementById("increase").addEventListener("click", () => {
+            state.set({ num: state.get("num") + 1 });
+        });
+
+        // Subscribe Updates
+        state.subscribe(updateUI);
+        doubleNum.subscribe(updateUI);
+        updateUI();
+    </script>
+
+</body>
+</html>
