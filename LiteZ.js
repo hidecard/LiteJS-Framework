@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 // Node.js environment detection
 const isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 
@@ -876,33 +874,7 @@ const LiteZ = {
       const fn = this.lifecycles[name]?.[lifecycle];
       if (typeof fn === 'function') fn(state, ui, context);
     },
-
-    // ---- CLI Command Handler ----
-    runServer(file) {
-      if (isNode) {
-        try {
-          const serverModule = require(file);
-          if (typeof serverModule === 'function') {
-            serverModule(this);
-          } else {
-            this._logError(`Server file ${file} must export a function`);
-          }
-        } catch (err) {
-          this._logError(`Failed to run server: ${err.message}`);
-        }
-      }
-    },
 };
-
-// CLI Handling
-if (isNode && require.main === module) {
-  const args = process.argv.slice(2);
-  if (args.length < 1) {
-    console.error('Usage: litez <server.js>');
-    process.exit(1);
-  }
-  LiteZ.runServer(args[0]);
-}
 
 // Export as Node.js module
 if (isNode) {
