@@ -9,8 +9,9 @@ const LiteUI = {
   persistedState: {},
   events: {},
   themes: { current: 'light', styles: {} },
-  store: null, // Global store
-  api: null, // API client
+  store: null,
+  api: null,
+  db: null, // Database instance
 
   // ---- Component Management ----
   createComponent(name, { template, setup = () => ({}), lifecycles = {}, lazy = false } = {}) {
@@ -305,9 +306,10 @@ const LiteUI = {
   },
 
   // ---- API Integration ----
-  initApi({ baseURL = '', interceptors = {} } = {}) {
+  initApi({ baseURL = '', interceptors = {}, csrfToken = null } = {}) {
     this.api = {
       baseURL,
+      csrfToken,
       interceptors: {
         request: interceptors.request || (config => config),
         response: interceptors.response || (res => res),
@@ -317,7 +319,10 @@ const LiteUI = {
         const fullConfig = this.interceptors.request({
           method,
           url: `${this.baseURL}${url}`,
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(this.csrfToken ? { 'X-CSRF-Token': this.csrfToken } : {}),
+          },
           ...config,
           ...(data && method !== 'GET' ? { body: JSON.stringify(data) } : {}),
         });
@@ -432,6 +437,144 @@ const LiteUI = {
     assert(condition, message) {
       if (!condition) throw new Error(`[Test Failed] ${message}`);
     },
+  },
+
+  // ---- Database Integration (IndexedDB) ----
+  initDB({ name = 'LiteUIDB', version = 1, stores = {} } = {}) {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(name, version);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        Object.keys(stores).forEach(store => {
+          if (!db.objectStoreNames.contains(store)) {
+            db.createObjectStore(store, stores[store]);
+          }
+        });
+      };
+      request.onsuccess = (e) => {
+        this.db = e.target.result;
+        resolve(this.db);
+      };
+      request.onerror = (e) => reject(e.target.error);
+    });
+  },
+
+  dbAction(storeName, action, data = {}) {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return reject(new Error('Database not initialized'));
+      const tx = this.db.transaction(storeName, 'readwrite');
+      const store = tx.objectStore(storeName);
+      let request;
+
+      switch (action) {
+        case 'add': request = store.add(data.value, data.key); break;
+        case 'get': request = store.get(data.key); break;
+        case 'put': request = store.put(data.value, data.key); break;
+        case 'delete': request = store.delete(data.key); break;
+        case 'all': request = store.getAll(); break;
+        default: return reject(new Error('Invalid action'));
+      }
+
+      request.onsuccess = (e) => resolve(e.target.result);
+      request.onerror = (e) => reject(e.target.error);
+    });
+  },
+
+  // ---- E-commerce: Cart Management ----
+  createCart() {
+    const cartState = this.createState({ items: [], total: 0 }, 'cart');
+    return {
+      addItem: (item) => {
+        const items = cartState.get('items');
+        const existing = items.find(i => i.id === item.id);
+        if (existing) {
+          existing.quantity += 1;
+        } else {
+          items.push({ ...item, quantity: 1 });
+        }
+        const total = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
+        cartState.set({ items: [...items], total });
+        this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+      },
+      removeItem: (id) => {
+        const items = cartState.get('items').filter(i => i.id !== id);
+        const total = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
+        cartState.set({ items, total });
+        this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+      },
+      getCart: () => cartState.get(),
+      checkout: async () => {
+        const cart = cartState.get();
+        await this.api.post('/checkout', cart);
+        cartState.set({ items: [], total: 0 });
+        this.dbAction('cart', 'put', { key: 'items', value: cartState.get() });
+      },
+    };
+  },
+
+  // ---- Social App: Social Features ----
+  createSocial() {
+    const notifications = this.createState({ list: [], unread: 0 }, 'notifications');
+    return {
+      addPost: async (content) => {
+        const post = await this.api.post('/posts', { content });
+        this.emit('new-post', post);
+        this.dbAction('posts', 'add', { value: post });
+        return post;
+      },
+      followUser: async (userId) => {
+        await this.api.post('/follow', { userId });
+        this.emit('follow', userId);
+      },
+      notify: (message) => {
+        const list = notifications.get('list');
+        list.unshift({ message, time: Date.now() });
+        notifications.set({ list, unread: notifications.get('unread') + 1 });
+        this.dbAction('notifications', 'put', { key: 'list', value: notifications.get() });
+      },
+      markRead: () => {
+        notifications.set({ ...notifications.get(), unread: 0 });
+        this.dbAction('notifications', 'put', { key: 'list', value: notifications.get() });
+      },
+      getNotifications: () => notifications.get(),
+    };
+  },
+
+  // ---- Dashboard: Analytics ----
+  createDashboard() {
+    const analytics = this.createState({ views: 0, clicks: 0, sales: 0 }, 'analytics');
+    return {
+      trackEvent: async (eventType, data) => {
+        await this.api.post('/analytics', { eventType, data });
+        const current = analytics.get();
+        if (eventType === 'view') analytics.set({ ...current, views: current.views + 1 });
+        if (eventType === 'click') analytics.set({ ...current, clicks: current.clicks + 1 });
+        if (eventType === 'sale') analytics.set({ ...current, sales: current.sales + 1 });
+        this.dbAction('analytics', 'put', { key: 'data', value: analytics.get() });
+      },
+      getAnalytics: () => analytics.get(),
+    };
+  },
+
+  // ---- Authentication ----
+  createAuth() {
+    const authState = this.createState({ user: null, token: null }, 'auth');
+    return {
+      login: async (credentials) => {
+        const response = await this.api.post('/login', credentials);
+        authState.set({ user: response.user, token: response.token });
+        this.dbAction('auth', 'put', { key: 'user', value: authState.get() });
+        this.emit('login', response.user);
+      },
+      logout: async () => {
+        await this.api.post('/logout');
+        authState.set({ user: null, token: null });
+        this.dbAction('auth', 'delete', { key: 'user' });
+        this.emit('logout');
+      },
+      getUser: () => authState.get('user'),
+      isAuthenticated: () => !!authState.get('token'),
+    };
   },
 
   // ---- Utility Functions ----
